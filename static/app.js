@@ -185,3 +185,30 @@
   };
   document.addEventListener("DOMContentLoaded", () => setTimeout(() => App.run(), 0));
 })();
+
+// Copy buttons for command blocks and a freshly created API key.
+(function () {
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+    return new Promise((resolve, reject) => {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy") ? resolve() : reject(); } catch (e) { reject(e); } finally { ta.remove(); }
+    });
+  }
+  document.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll("pre.code, #newkey").forEach((el) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "btn copy"; b.textContent = "Copy";
+      b.setAttribute("aria-label", el.id === "newkey" ? "Copy the new API key" : "Copy this command");
+      b.addEventListener("click", () => {
+        copyText(el.textContent.trim()).then(
+          () => { b.textContent = "Copied"; },
+          () => { b.textContent = "Select and copy by hand"; });
+        setTimeout(() => { b.textContent = "Copy"; }, 2000);
+      });
+      el.insertAdjacentElement("afterend", b);
+    });
+  });
+})();

@@ -60,7 +60,40 @@ curl -X POST http://localhost:5000/api/ingest/v1/tracks \
 
 Exactly four fields per point, up to 5,000 points per request, x and y in metres from the bottom-left of the
 floor, t in seconds. Extra fields are rejected. CSV upload in settings takes the same four columns.
-`video_to_tracks.py` is a starting point for an agent that produces these points from footage.
+The camera agent (`python -m agent`, below) produces these points from footage and sends them for you.
+
+## Camera agent
+
+Turns a video file, camera or RTSP stream into the four-field points above. Frames stay in memory for one
+detection pass; nothing but `track_id, t, x, y` leaves the machine.
+
+```bash
+pip install -r requirements-video.txt                 # OpenCV, SciPy, Ultralytics (large)
+
+# 1. Calibrate once per camera: 4 to 8 floor points you can measure with a tape
+python -m agent snapshot --source rtsp://cam/stream --out frame.png     # delete the image afterwards
+python -m agent click --image frame.png --width 20 --height 12 --out calib.json   # needs a display
+python -m agent check --calib calib.json --image frame.png              # error in metres + a 1 m grid overlay
+
+# 2. Run it
+python -m agent run --source clip.mp4 --calib calib.json --layout A --csv tracks.csv.gz      # file out
+export DWELL_API_KEY=dtm_...                                                                 # from Settings > API keys
+python -m agent run --source rtsp://cam/stream --calib calib.json --layout A \
+       --api https://your-app.onrender.com --recording "Live"                                # live, to the app
+
+# 3. Check the code itself (no camera or model needed)
+python -m agent selftest        # synthetic store: prints measured position error and stops found
+python -m tests.test_agent      # 19 tests, including video -> ingest API -> analysis
+```
+
+`calib.json` also takes `exclude` (floor rectangles never recorded, such as a staff room) and `floor_size`
+(points outside the floor are dropped). Track ids are random per run and never joined across runs. Short
+tracks (under 2 s) are held back and dropped, so flicker never reaches the store. If the app is unreachable the
+points wait in `spool/` and are sent on the next start.
+
+Detectors: `--detector yolo` (default, Ultralytics YOLO with ByteTrack) is the real one. `--detector motion`
+is a no-model fallback for dry runs; it loses people who stand still for a long time and merges people who
+walk together.
 
 ## Privacy by design
 
@@ -69,7 +102,7 @@ Only `track_id, t, x, y` exist in the schema. No video, faces, device ids or nam
 ## Known limits
 
 - All demo numbers are simulated. The analysis has not seen real footage.
-- `video_to_tracks.py`, the Docker image and the Supabase backend were written without access to a
-  running Docker daemon or a live Supabase project; verify them against your own project first.
+- The camera agent is tested on synthetic video only, and its YOLO path only against a fake model (no weights or
+  network in the build sandbox). Run it on a real clip before relying on it.
 - The first Plotly.js and font load needs internet access (CDN).
 - Checkout wait uses Little's law, which assumes a steady state. Treat it as indicative.

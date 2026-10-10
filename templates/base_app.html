@@ -15,10 +15,12 @@
         <a href="{{ url_for(ep, ref=ref, layout=(layout.key if layout and ep != 'experiment' else None)) }}"
            {% if endpoint == ep %}aria-current="page"{% endif %}>{{ label }}</a>
       {% endfor %}
+      {% if can_edit %}<a href="{{ url_for('agent_setup', ref=ref) }}" {% if endpoint == 'agent_setup' %}aria-current="page"{% endif %}>Camera agent</a>{% endif %}
       {% if can_edit %}<a href="{{ url_for('settings', ref=ref) }}" {% if endpoint in ('settings', 'zone_editor') %}aria-current="page"{% endif %}>Settings</a>{% endif %}
     </nav>
     {% endif %}
     <div class="rail-foot">
+      <a class="back-link" href="{{ url_for('landing') }}">&larr; Back to main page</a>
       {% if store and layout and ready_layouts|length > 1 and endpoint in ('overview', 'zones', 'flags', 'journeys') %}
       <div>
         <span class="field-label" id="layout-label">Layout</span>

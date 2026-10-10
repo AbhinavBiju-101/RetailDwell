@@ -1,0 +1,73 @@
+{% extends "base_app.html" %}
+{% block content %}
+<h1>Camera agent</h1>
+<p class="lede">Connect a camera to {{ store.name }} in three steps. The agent turns video into anonymous floor positions on your own machine and sends only those. No video leaves it.</p>
+
+{% if not layouts %}
+<section class="block"><p>This store has no layout yet. <a href="{{ url_for('settings', ref=ref) }}#layouts">Create one in Settings</a>, then come back.</p></section>
+{% else %}
+
+<section class="block" aria-labelledby="a-layout">
+  <h2 id="a-layout">Which layout is the camera recording?</h2>
+  <p>Points are filed under one layout. Use a new layout for each arrangement you want to compare.</p>
+  <p>
+    {% for l in layouts %}
+      <a class="btn {% if layout and l.key == layout.key %}primary{% endif %}" href="{{ url_for('agent_setup', ref=ref, layout=l.key) }}">{{ l.key }}: {{ l.label }}</a>
+    {% endfor %}
+  </p>
+  {% if layout.dataset %}
+  <p class="dim">Layout {{ layout.key }} has {{ '{:,}'.format(layout.dataset.n_points or 0) }} points{% if layout.dataset.updated_at %}, last updated {{ layout.dataset.updated_at[:16]|replace('T', ' ') }} UTC{% endif %}. Reload this page after a run to see the count change.</p>
+  {% else %}
+  <p class="dim">Layout {{ layout.key }} has no data yet.</p>
+  {% endif %}
+</section>
+
+<section class="block" aria-labelledby="a-key">
+  <h2 id="a-key">1. A key</h2>
+  {% if keys %}
+  <p>You have {{ keys|length }} active key{{ '' if keys|length == 1 else 's' }}:
+    {% for k in keys %}<code>{{ k.prefix }}...</code> ({{ k.label }}){{ ', ' if not loop.last }}{% endfor %}.
+    The full key was shown once when it was created. If you no longer have it, make a new one.</p>
+  {% else %}
+  <p>No active keys yet.</p>
+  {% endif %}
+  <p><a class="btn" href="{{ url_for('settings', ref=ref) }}#keys">Create or revoke keys</a></p>
+  <p>Keep the key out of your command history. Set it once in the shell where the agent runs:</p>
+  <pre class="code">export DWELL_API_KEY=dtm_YOUR_KEY</pre>
+</section>
+
+<section class="block" aria-labelledby="a-cal">
+  <h2 id="a-cal">2. Calibrate the camera (once per camera)</h2>
+  <p>Pick 4 to 8 spots on the floor you can measure with a tape, such as tile corners or marks you tape down. Spread them across the area the camera sees. Measure each one in metres from the bottom-left corner of the floor plan (this store is {{ '%g'|format(store.width_m) }} m wide and {{ '%g'|format(store.height_m) }} m deep).</p>
+  <pre class="code">pip install -r requirements-video.txt
+
+python -m agent snapshot --source rtsp://CAMERA_ADDRESS/stream --out frame.png
+python -m agent click --image frame.png --width {{ '%g'|format(store.width_m) }} --height {{ '%g'|format(store.height_m) }} --out calib.json
+python -m agent check --calib calib.json --image frame.png</pre>
+  <p><code>snapshot</code> saves one frame. <code>click</code> opens it so you can click each spot and type its position. <code>check</code> reports the error in metres and draws a 1 m grid on the frame. Aim for under 0.15 m, and delete <code>frame.png</code> and the overlay afterwards because they may show people.</p>
+  <details>
+    <summary>Staff rooms and other areas to leave out</summary>
+    <p>Add rectangles to <code>calib.json</code> and the agent never records anything inside them. Points outside the floor size are dropped automatically.</p>
+    <pre class="code">"floor_size": [{{ '%g'|format(store.width_m) }}, {{ '%g'|format(store.height_m) }}],
+"exclude": [[0, 0, 2, 3]]</pre>
+  </details>
+</section>
+
+<section class="block" aria-labelledby="a-run">
+  <h2 id="a-run">3. Run it on layout {{ layout.key }}</h2>
+  <pre class="code">python -m agent run \
+  --source rtsp://CAMERA_ADDRESS/stream \
+  --calib calib.json \
+  --layout {{ layout.key }} \
+  --api {{ host }} \
+  --recording "Live"</pre>
+  <p>To try it on a recorded clip first, use <code>--source clip.mp4</code> and add <code>--csv tracks.csv.gz</code> instead of <code>--api</code>, then upload the file in <a href="{{ url_for('settings', ref=ref) }}">Settings</a>.</p>
+  <p>If the app is unreachable the agent keeps points in a <code>spool</code> folder and sends them on the next start. A wrong key or layout stops the agent with a message that says what to fix.</p>
+</section>
+
+<section class="block" aria-labelledby="a-note">
+  <h2 id="a-note">Before you rely on it</h2>
+  <p>The agent has been tested on synthetic video only. Run it on a real clip and compare a few zones against what you see on the floor before trusting the numbers.</p>
+</section>
+{% endif %}
+{% endblock %}

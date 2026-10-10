@@ -63,7 +63,9 @@ but have outgrown guesswork. [doc]
 - Ingest API for camera agents with per-store API keys.
 
 ### Not built yet (say so, do not imply otherwise)
-- The live camera agent. `video_to_tracks.py` is an untested scaffold for detection, tracking and floor mapping.
+- Camera agent validation on real footage. The agent (`python -m agent`) exists and is tested on synthetic video
+  only [sim-video: median position error 0.09 to 0.11 m, 90th percentile 0.22 to 0.25 m over three seeds, with the
+  no-model motion detector; YOLO path not yet run on real footage].
 - Accuracy validation on real footage.
 - Multi-camera fusion, POS matching, revenue per visitor, what-if simulation, time-of-day baselines.
 - Google sign-in (planned).

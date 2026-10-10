@@ -1,3 +1,5 @@
-# Only needed for video_to_tracks.py (real footage), not for the simulated demo
+# Only needed for the camera agent (python -m agent), not for the web app or the simulated demo
 opencv-python-headless
+scipy
 ultralytics
+requests

@@ -31,3 +31,5 @@ calib.json
 .idea/
 .DS_Store
 Thumbs.db
+spool/
+*.csv.gz
