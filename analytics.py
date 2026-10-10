@@ -5,7 +5,7 @@ checkout throughput, normalised before/after comparison, relative flags.
 import math
 import numpy as np
 import pandas as pd
-from config import (DWELL_RADIUS_M, DWELL_MIN_S, MIN_PRESENCE_S, SAMPLE_HZ,
+from config import (TIME_WINDOW_S, TIME_MIN_SHOPPERS, TIME_MIN_EXPECTED, TIME_MIN_Z, DWELL_RADIUS_M, DWELL_MIN_S, MIN_PRESENCE_S, SAMPLE_HZ,
                     QUEUE_MARGIN_M)
 
 DT = 1.0 / SAMPLE_HZ
@@ -256,6 +256,74 @@ def flag_checkout(cm):
                          f"assumes steady state."))
 
 
+# ---------- each zone against its own usual share, by time window ----------
+def time_baselines(df, labels, zones, window_s=TIME_WINDOW_S):
+    """Share of shoppers reaching each merchandise zone per time window, against the zone's own average.
+
+    Normalised by the shoppers present in the window, so a busy hour does not look like a good hour for every zone.
+    A window is flagged only when it is both 30%+ away from the zone's norm and unlikely to be chance
+    (normal approximation to a binomial, |z| >= TIME_MIN_Z).
+    Returns dict(window_s, windows, cells, reason): `reason` is set (and cells empty) when there is too little data.
+    t is seconds since the recording started; real clock time is not stored.
+    """
+    shoppers = labels[labels.mission != "loiterer / waiter"].track_id
+    d = df[df.track_id.isin(shoppers)].copy()
+    out = dict(window_s=window_s, windows=[], cells=[], reason=None)
+    if d.empty:
+        out["reason"] = "No shopper tracks yet."
+        return out
+    d["w"] = (d.t // window_s).astype(int)
+    n_w = d.groupby("w").track_id.nunique()
+    valid = n_w[n_w >= TIME_MIN_SHOPPERS].index.tolist()
+    if len(valid) < 2:
+        out["reason"] = (f"Needs at least two {window_s // 60}-minute windows with {TIME_MIN_SHOPPERS}+ shoppers each; "
+                         f"this recording has {len(valid)}.")
+        return out
+    pres = (d.groupby(["w", "zone", "track_id"]).size() * DT).rename("present_s").reset_index()
+    pres = pres[pres.present_s >= MIN_PRESENCE_S]
+    visitors = pres.groupby(["zone", "w"]).track_id.nunique()
+    out["windows"] = [dict(w=int(w), start_min=int(w * window_s // 60), end_min=int((w + 1) * window_s // 60),
+                           shoppers=int(n_w[w])) for w in valid]
+    total_n = float(n_w[valid].sum())
+    for name, z in zones.items():
+        if z[4] != "merchandise":
+            continue
+        v = {w: int(visitors.get((name, w), 0)) for w in valid}
+        p = sum(v.values()) / total_n
+        for w in valid:
+            n = float(n_w[w])
+            exp = p * n
+            sd = math.sqrt(n * p * (1 - p))
+            ratio = v[w] / exp if exp > 0 else float("nan")
+            zsc = (v[w] - exp) / sd if sd > 0 else 0.0
+            flag = None
+            if exp >= TIME_MIN_EXPECTED and abs(zsc) >= TIME_MIN_Z:
+                flag = "low" if (ratio < 0.7 and zsc < 0) else "high" if (ratio > 1.3 and zsc > 0) else None
+            out["cells"].append(dict(zone=name, w=int(w), visitors=v[w], expected=round(exp, 1), shoppers=int(n),
+                                     ratio=None if ratio != ratio else round(ratio, 3), z=round(zsc, 2), flag=flag))
+    return out
+
+
+def timing_flags(tb, limit=6):
+    """Plain-language findings for the unusual zone-windows, strongest first."""
+    rows = []
+    mins = {w["w"]: (w["start_min"], w["end_min"]) for w in tb.get("windows", [])}
+    for c in sorted((c for c in tb.get("cells", []) if c["flag"]), key=lambda c: -abs(c["z"]))[:limit]:
+        a, b = mins[c["w"]]
+        pct = abs(1 - c["ratio"])
+        if c["flag"] == "low":
+            rows.append(dict(kind="Quieter than usual", zone=c["zone"], w=c["w"], message=(
+                f"{c['zone']}: {pct:.0%} fewer shoppers than its own usual share between minutes {a} and {b} "
+                f"({c['visitors']} reached it, about {c['expected']:.0f} expected). Look for a cause at that time: "
+                f"stock out, a blocked route, a promotion elsewhere or fewer staff nearby.")))
+        else:
+            rows.append(dict(kind="Busier than usual", zone=c["zone"], w=c["w"], message=(
+                f"{c['zone']}: {pct:.0%} more shoppers than its own usual share between minutes {a} and {b} "
+                f"({c['visitors']} reached it, about {c['expected']:.0f} expected). If that was a promotion or "
+                f"an event, it worked. If not, find out what drew people there.")))
+    return rows
+
+
 # ---------- one-call API used by the dashboard ----------
 def analyse_layout(tracks, zones, w, h, window_s=300):
     """Full analysis of one recording. `zones` is {name: (x0, y0, x1, y1, type)}."""
@@ -263,5 +331,5 @@ def analyse_layout(tracks, zones, w, h, window_s=300):
     labels = label_visits(df, zones, presence, episodes)
     stats = zone_stats(zones, presence, episodes, labels)
     return dict(zones=zones, w=w, h=h, df=df, presence=presence, episodes=episodes, labels=labels,
-                stats=stats, flags=relative_flags(stats, labels),
+                stats=stats, flags=relative_flags(stats, labels), timing=time_baselines(df, labels, zones),
                 checkout=checkout_metrics(df, zones, window_s))

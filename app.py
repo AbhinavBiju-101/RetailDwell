@@ -42,6 +42,7 @@ SEGMENTS = ["directed", "exploratory", LOITERER, "pass-through"]
 NAV = [("overview", "Overview"), ("experiment", "Experiment"), ("zones", "Zones"),
        ("flags", "Flags"), ("journeys", "Journeys")]
 TONE = {"Bottleneck": "bad", "Dead zone": "bad", "Visibility problem": "warn",
+        "Quieter than usual": "warn", "Busier than usual": "info",
         "Pass-through": "info", "Destination": "info", "Hot zone": "good",
         "Healthy": "good", "OK": "good"}
 TONE_RANK = {"bad": 0, "warn": 1, "info": 2, "good": 3}
@@ -64,6 +65,25 @@ def clean_json(o):
     return o
 
 
+def timing_view(tb):
+    """Zone x window grid for the zones page: text and flag per cell, so colour is never the only signal."""
+    if not tb["windows"]:
+        return dict(reason=tb["reason"], windows=[], rows=[])
+    by = {(c["zone"], c["w"]): c for c in tb["cells"]}
+    zones = list(dict.fromkeys(c["zone"] for c in tb["cells"]))
+    rows = []
+    for z in zones:
+        cells = []
+        for w in tb["windows"]:
+            c = by[(z, w["w"])]
+            pct = None if c["ratio"] is None else round((c["ratio"] - 1) * 100)
+            cells.append(dict(text="-" if pct is None else f"{pct:+d}%", flag=c["flag"],
+                              title=f"{c['visitors']} reached it, about {c['expected']:.0f} expected from {c['shoppers']} shoppers"))
+        rows.append(dict(zone=z, cells=cells))
+    return dict(reason=None, windows=[dict(label=f"{w['start_min']} to {w['end_min']}", shoppers=w["shoppers"])
+                                      for w in tb["windows"]], rows=rows)
+
+
 def records(df):
     return json.loads(df.to_json(orient="records"))
 
@@ -83,6 +103,7 @@ def has_merch(layout):
 def findings(R):
     out = [dict(kind=f.kind, tone=TONE.get(f.kind, "info"), text=f.message)
            for _, f in R["flags"].iterrows() if f.kind != "Healthy"]
+    out += [dict(kind=f["kind"], tone=TONE[f["kind"]], text=f["message"]) for f in an.timing_flags(R["timing"])]
     chk = an.flag_checkout(R["checkout"])
     if chk:
         out.append(dict(kind=chk["kind"], tone=TONE[chk["kind"]], text=chk["message"]))
@@ -492,7 +513,8 @@ def create_app(repo=None):
             return page("empty.html", store, layouts, layout, title="Zones", active="zones")
         R, _ = analyse(store, layout)
         return page("zones.html", store, layouts, layout, title="Zones", active="zones",
-                    rows=records(R["stats"]), n_shoppers=int(R["stats"].attrs["n_shoppers"]))
+                    rows=records(R["stats"]), n_shoppers=int(R["stats"].attrs["n_shoppers"]),
+                    timing=timing_view(R["timing"]))
 
     @app.get("/app/s/<ref>/flags")
     @login_required
@@ -599,6 +621,16 @@ def create_app(repo=None):
         new_key = session.pop("new_key", None)
         return page("settings.html", store, layouts, None, title="Settings", active="settings",
                     keys=keys, new_key=new_key, host=request.host_url.rstrip("/"))
+
+    @app.get("/app/s/<ref>/agent")
+    @login_required
+    @writer_required
+    def agent_setup(ref):
+        store, layouts = load_ctx(ref, need_edit=True)
+        keys = [k for k in repo.list_api_keys(g.user, store["id"]) if not k.get("revoked_at")]
+        sel = layout_by_key(layouts, (request.args.get("layout") or "").upper()) or (layouts[0] if layouts else None)
+        return page("agent.html", store, layouts, sel, title="Camera agent", active="agent",
+                    keys=keys, host=request.host_url.rstrip("/"))
 
     @app.post("/app/s/<ref>/settings/store")
     @login_required

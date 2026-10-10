@@ -344,3 +344,13 @@ main.public { max-width: 82rem; margin: 0 auto; padding: 1rem clamp(1.25rem, 4vw
   .auth-top { position: static; justify-content: flex-end; margin-bottom: 1rem; }
 }
 @media (prefers-reduced-motion: reduce) { .glow { animation: none; } * { transition-duration: .01ms !important; } }
+
+.back-link { font-size: .875rem; color: var(--ink-2); text-decoration: none; }
+.back-link:hover { color: var(--ink); text-decoration: underline; }
+.btn.copy { font-size: .8125rem; padding: .3rem .75rem; margin: .4rem 0 1rem; }
+
+table.timing td { text-align: center; white-space: nowrap; }
+td.cell-low { color: var(--warn); font-weight: 800; }
+td.cell-high { color: var(--good); font-weight: 800; }
+table.timing th[scope="col"] { text-align: center; }
+table.timing th .dim { font-weight: 400; }
