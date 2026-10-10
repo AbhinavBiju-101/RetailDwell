@@ -1,0 +1,61 @@
+{% extends "base_app.html" %}
+{% block content %}
+<h1>Where shoppers spend their time</h1>
+<p class="lede">{{ layout.label }}: {{ kpi.visits }} visits, of which {{ kpi.shoppers }} were shoppers.
+  {{ kpi.busiest }} reaches {{ '%.0f'|format(kpi.busiest_share * 100) }}% of shoppers; {{ kpi.quietest }} reaches {{ '%.0f'|format(kpi.quietest_share * 100) }}%.</p>
+
+<dl class="figures">
+  <div class="figure"><dd>{{ kpi.visits }}</dd><dt>Visits</dt></div>
+  <div class="figure"><dd>{{ '%.1f'|format(kpi.avg_visit_min) }} <small>min</small></dd><dt>Average visit</dt></div>
+  <div class="figure"><dd>{{ '%.0f'|format(kpi.loiterer_pct * 100) }}<small>%</small></dd><dt>Loiterers and waiters</dt></div>
+  <div class="figure"><dd>{% if kpi.peak_wait is not none %}{{ '%.1f'|format(kpi.peak_wait) }} <small>min</small>{% else %}n/a{% endif %}</dd><dt>Longest estimated checkout wait</dt></div>
+</dl>
+
+{% include "_heatcontrols.html" %}
+<div class="split">
+  <section aria-labelledby="map-h">
+    <h2 id="map-h" class="sr-only">Heat map of time spent</h2>
+    <div class="map-frame">
+      <div class="map" id="heat" data-plot role="img" aria-label="Heat map of time spent on the store floor, {{ layout.label }}"></div>
+      <p class="map-note">Cooler to brighter means more time spent. Outlines are zones. Accuracy is at zone level, not centimetres.</p>
+    </div>
+  </section>
+  <div>
+    <section class="panel" aria-labelledby="find-h">
+      <h2 id="find-h">What stands out</h2>
+      {% if items %}
+      <ul class="findings">
+        {% for f in items[:4] %}
+        <li class="finding {{ f.tone }}"><h3>{{ f.kind }}</h3><p>{{ f.text }}</p></li>
+        {% endfor %}
+      </ul>
+      {% if items|length > 4 %}<p><a href="{{ url_for('flags', ref=ref, layout=layout.key) }}">See all {{ items|length }} flags</a></p>{% endif %}
+      {% else %}<p class="empty">Nothing unusual in this layout.</p>{% endif %}
+    </section>
+    <section class="panel" aria-labelledby="seg-h">
+      <h2 id="seg-h">Visit types</h2>
+      <ul class="bars">
+        {% set colors = {'directed': 'var(--seg-directed)', 'exploratory': 'var(--seg-exploratory)', 'loiterer / waiter': 'var(--seg-loiterer)', 'pass-through': 'var(--seg-pass)'} %}
+        {% for s in segs %}
+        <li><span>{{ s.name|capitalize }}</span><span class="track"><span class="fill" style="width: {{ '%.1f'|format(s.pct * 100) }}%; --c: {{ colors[s.name] }}; display:block"></span></span><span class="num">{{ '%.0f'|format(s.pct * 100) }}%</span></li>
+        {% endfor %}
+      </ul>
+      <p class="map-note">Labels are inferred from movement and carry a confidence score. They describe groups, never a person.</p>
+    </section>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  let payload = null;
+  const el = document.getElementById("heat");
+  App.onRender(async function () {
+    if (!payload) payload = await App.getJSON("{{ url_for('api_heatmap', ref=ref, key=layout.key) }}");
+    App.plot(el, [App.heatTrace(payload, { showscale: true })], App.mapLayout(payload, { margin: { l: 44, r: 8, t: 6, b: 32 } }));
+    el.classList.add("ready");
+  });
+});
+</script>
+{% endblock %}

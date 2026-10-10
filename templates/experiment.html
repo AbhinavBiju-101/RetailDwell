@@ -1,0 +1,122 @@
+{% extends "base_app.html" %}
+{% block content %}
+<h1>Did the change work?</h1>
+<p class="lede">{{ zone }} moved {{ '%.0f'|format(moved) }} m between {{ la.label }} and {{ lb.label }}. Drag the divider to compare where people spent time. Both maps show seconds per visit, so a busier day does not look like a better layout.</p>
+
+<form class="toolbar" method="get" action="{{ url_for('experiment', ref=ref) }}">
+  <div>
+    <label class="field-label" for="zone">Zone to test</label>
+    <select id="zone" name="zone" onchange="this.form.submit()">
+      {% for z in zones %}<option value="{{ z }}" {% if z == zone %}selected{% endif %}>{{ z }}</option>{% endfor %}
+    </select>
+  </div>
+  {% if ready_layouts|length > 2 %}
+  <div>
+    <label class="field-label" for="a">Before</label>
+    <select id="a" name="a" onchange="this.form.submit()">{% for l in ready_layouts %}<option value="{{ l.key }}" {% if l.key == la.key %}selected{% endif %}>{{ l.key }}: {{ l.label }}</option>{% endfor %}</select>
+  </div>
+  <div>
+    <label class="field-label" for="b">After</label>
+    <select id="b" name="b" onchange="this.form.submit()">{% for l in ready_layouts %}<option value="{{ l.key }}" {% if l.key == lb.key %}selected{% endif %}>{{ l.key }}: {{ l.label }}</option>{% endfor %}</select>
+  </div>
+  {% endif %}
+  <noscript><button class="btn primary" type="submit">Show</button></noscript>
+</form>
+
+{% include "_heatcontrols.html" %}
+<div class="split">
+  <section aria-labelledby="wipe-h">
+    <h2 id="wipe-h" class="sr-only">Before and after heat maps</h2>
+    <div class="map-frame">
+      <div class="wipe" id="wipe" style="--p: 50%">
+        <div class="layer" id="plot-a" data-plot></div>
+        <div class="layer top" id="plot-b" data-plot></div>
+        <span class="tag l">{{ la.key }}: before</span><span class="tag r">{{ lb.key }}: after</span>
+        <div class="line" aria-hidden="true"></div>
+        <input type="range" min="2" max="98" value="50" id="wipe-range" aria-label="Divider position between the two layouts">
+      </div>
+      <div class="legend-bar"><span>Less time</span><span class="ramp" id="ramp" data-ramp></span><span>More time (seconds per visit)</span></div>
+    </div>
+    {% if wait_a and wait_b %}
+    <div class="panel" style="margin-top: 1rem">
+      <h2>Checkout wait</h2>
+      <p>Estimated by dividing people in the checkout area by people served per minute. Median across the day, and the worst window.</p>
+      <div class="chart" id="waitcmp" data-plot style="height: 190px" role="img" aria-label="Median and peak estimated checkout wait for each layout"></div>
+      <p class="map-note">{{ la.key }}: median {{ '%.1f'|format(wait_a.median) }} min, peak {{ '%.1f'|format(wait_a.peak) }} min. {{ lb.key }}: median {{ '%.1f'|format(wait_b.median) }} min, peak {{ '%.1f'|format(wait_b.peak) }} min.</p>
+    </div>
+    {% endif %}
+  </section>
+
+  <div>
+    <section class="panel" aria-labelledby="lift-h">
+      <h2 id="lift-h">Share of shoppers who stopped at {{ zone }}</h2>
+      {% if stop.lift == stop.lift %}<p class="lift {{ vstop[0] }}">{{ '%+.0f'|format(stop.lift * 100) }}%</p>{% else %}<p class="lift">n/a</p>{% endif %}
+      <p><strong>{{ vstop[1] }}</strong>
+        {% if stop.ci_low == stop.ci_low %}After adjusting for total traffic, the likely range is {{ '%+.0f'|format(stop.ci_low * 100) }}% to {{ '%+.0f'|format(stop.ci_high * 100) }}%.{% endif %}</p>
+      <div class="chart" id="ci" data-plot style="height: 120px" role="img" aria-label="Lift with 95 percent range"></div>
+      <dl class="compare-line">
+        <dt>Stopped there</dt><dd>{{ '%.0f'|format(stop.share_a * 100) }}% before, {{ '%.0f'|format(stop.share_b * 100) }}% after</dd>
+        <dt>Walked through it</dt><dd>{{ '%.0f'|format(reach.share_a * 100) }}% before, {{ '%.0f'|format(reach.share_b * 100) }}% after ({% if reach.lift == reach.lift %}{{ '%+.0f'|format(reach.lift * 100) }}%{% else %}n/a{% endif %})</dd>
+        <dt>Shoppers in store</dt><dd>{{ shoppers_a }} before, {{ shoppers_b }} after</dd>
+        <dt>Raw stops</dt><dd>{{ stop.raw_visits_a }} before, {{ stop.raw_visits_b }} after ({% if stop.raw_lift == stop.raw_lift %}{{ '%+.0f'|format(stop.raw_lift * 100) }}%{% else %}n/a{% endif %})</dd>
+        <dt>Time stopped there</dt><dd>{{ '%.0f'|format(sa.engaged_dwell_s) }} s before, {{ '%.0f'|format(sb.engaged_dwell_s) }} s after</dd>
+      </dl>
+    </section>
+    <section class="panel">
+      <h2>How to read this</h2>
+      <p>A stop is staying within 1 m for at least 5 seconds. Stopping is the headline because a display that moves onto a main path is walked past more, which would flatter a count of people who merely came near it.</p>
+      <p>Comparing shares of shoppers removes the effect of a busier day. Loiterers and people waiting are left out.</p>
+      <p class="map-note">This shows association, not proof. The cleanest test compares days of the same type with the same promotions running.</p>
+    </section>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const C = {{ chart|tojson }};
+  const wipe = document.getElementById("wipe"), range = document.getElementById("wipe-range");
+  range.addEventListener("input", () => wipe.style.setProperty("--p", range.value + "%"));
+  let pa = null, pb = null;
+  const base = "{{ url_for('api_heatmap', ref=ref, key='KEY') }}";
+
+  App.onRender(async function () {
+    document.getElementById("ramp").style.background = App.rampCss();
+    if (!pa) [pa, pb] = await Promise.all([
+      App.getJSON(base.replace("KEY", C.a) + "?per_visit=1"),
+      App.getJSON(base.replace("KEY", C.b) + "?per_visit=1"),
+    ]);
+    const zmax = Math.max(...pa.z.flat(), ...pb.z.flat());   // one shared scale
+    const opts = { zmax: zmax, nohover: true };
+    const lay = (p) => App.mapLayout(p, { margin: { l: 44, r: 8, t: 6, b: 32 } });
+    App.plot("plot-a", [App.heatTrace(pa, opts)], lay(pa), { staticPlot: true });
+    App.plot("plot-b", [App.heatTrace(pb, opts)], lay(pb), { staticPlot: true });
+
+    const c = C.stop, pct = (v) => Math.round(v * 100);
+    if (c.lift !== null && c.lo !== null) {
+      App.plot("ci", [{
+        type: "scatter", mode: "markers", x: [pct(c.lift)], y: [""],
+        marker: { size: 12, color: App.css("--accent") },
+        error_x: { type: "data", symmetric: false, array: [pct(c.hi - c.lift)], arrayminus: [pct(c.lift - c.lo)], color: App.css("--accent"), thickness: 3, width: 8 },
+        hovertemplate: "%{x}% lift<extra></extra>",
+      }], App.baseLayout({
+        margin: { l: 8, r: 8, t: 6, b: 36 },
+        xaxis: { ticksuffix: "%", zeroline: true, zerolinecolor: App.css("--ink"), zerolinewidth: 2, gridcolor: App.css("--line"), title: { text: "Change in share stopping at " + C.zone, font: { size: 12 } }, fixedrange: true },
+        yaxis: { visible: false, fixedrange: true },
+      }));
+    }
+
+    if (C.wait_a && C.wait_b && document.getElementById("waitcmp")) {
+      const mk = (name, key, color) => ({ type: "bar", orientation: "h", name: name,
+        y: [C.a + " before", C.b + " after"], x: [C.wait_a[key], C.wait_b[key]], marker: { color: color },
+        hovertemplate: name + ": %{x:.1f} min<extra></extra>" });
+      App.plot("waitcmp", [mk("Median", "median", App.css("--accent")), mk("Peak", "peak", App.css("--bad"))],
+        App.baseLayout({ barmode: "group", margin: { l: 80, r: 12, t: 6, b: 40 }, legend: { orientation: "h", y: -0.3 },
+          xaxis: { title: { text: "Estimated wait (min)", font: { size: 12 } }, rangemode: "tozero", gridcolor: App.css("--line"), fixedrange: true },
+          yaxis: { autorange: "reversed", fixedrange: true } }));
+    }
+  });
+});
+</script>
+{% endblock %}

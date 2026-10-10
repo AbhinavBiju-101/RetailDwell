@@ -1,0 +1,3 @@
+# Only needed for video_to_tracks.py (real footage), not for the simulated demo
+opencv-python-headless
+ultralytics

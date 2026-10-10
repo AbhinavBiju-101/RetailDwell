@@ -1,0 +1,70 @@
+{% extends "base_app.html" %}
+{% block content %}
+<h1>How people move</h1>
+<p class="lede">A sample of probable journeys from the entrance. Dots are two seconds apart, so tight clusters mean someone stopped. Paths are smoothed and anonymous.</p>
+
+<form class="toolbar" id="controls" onsubmit="return false">
+  <div>
+    <label class="field-label" for="segment">Visit type</label>
+    <select id="segment" name="segment">
+      <option value="all">All visits</option>
+      {% for s in segments %}<option value="{{ s }}">{{ s|capitalize }}</option>{% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="field-label" for="count">Paths shown: <output id="count-out">15</output></label>
+    <input class="plain" type="range" id="count" min="5" max="40" value="15">
+  </div>
+  <button class="btn" type="button" id="shuffle">Show different paths</button>
+</form>
+
+<div class="map-frame">
+  <div class="map" id="paths" data-plot role="img" aria-label="Sampled shopper journeys on the store floor, {{ layout.label }}"></div>
+  <p class="map-note" id="paths-note">Loading paths.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const seg = document.getElementById("segment"), count = document.getElementById("count");
+  const out = document.getElementById("count-out"), note = document.getElementById("paths-note");
+  let seed = 1, data = null, pending = null;
+
+  const COLORS = { "directed": "--seg-directed", "exploratory": "--seg-exploratory", "loiterer / waiter": "--seg-loiterer", "pass-through": "--seg-pass" };
+
+  async function load() {
+    const url = "{{ url_for('api_journeys', ref=ref, key=layout.key) }}?segment=" + encodeURIComponent(seg.value) + "&n=" + count.value + "&seed=" + seed;
+    data = await App.getJSON(url);
+    draw();
+  }
+  function draw() {
+    if (!data) return;
+    const bySeg = {};
+    data.paths.forEach((p) => { (bySeg[p.mission] = bySeg[p.mission] || []).push(p); });
+    const traces = [];
+    Object.entries(bySeg).forEach(([m, ps]) => {
+      const color = App.css(COLORS[m]);
+      const lx = [], ly = [], dx = [], dy = [];
+      ps.forEach((p) => {
+        p.x.forEach((v, i) => { lx.push(v); ly.push(p.y[i]); if (i % 4 === 0) { dx.push(v); dy.push(p.y[i]); } });
+        lx.push(null); ly.push(null);
+      });
+      const label = m.charAt(0).toUpperCase() + m.slice(1);
+      traces.push({ type: "scatter", mode: "lines", x: lx, y: ly, line: { color: color, width: 1.6 }, opacity: 0.55, name: label, legendgroup: m, hoverinfo: "skip" });
+      traces.push({ type: "scatter", mode: "markers", x: dx, y: dy, marker: { color: color, size: 4 }, opacity: 0.8, legendgroup: m, showlegend: false, hoverinfo: "skip" });
+    });
+    const lay = App.mapLayout(data, { showlegend: true, legend: { orientation: "h", y: -0.12, x: 0 }, margin: { l: 44, r: 8, t: 6, b: 52 } });
+    App.plot("paths", traces, lay);
+    document.getElementById("paths").classList.add("ready");
+    note.textContent = "Showing " + data.paths.length + " of " + data.available + " " + (seg.value === "all" ? "visits" : seg.value + " visits") + ". Labels are inferred and carry a confidence score.";
+  }
+  const reload = () => { out.textContent = count.value; clearTimeout(pending); pending = setTimeout(load, 120); };
+  seg.addEventListener("change", () => { seed = 1; reload(); });
+  count.addEventListener("input", reload);
+  document.getElementById("shuffle").addEventListener("click", () => { seed += 1; reload(); });
+
+  App.onRender(async function () { if (!data) await load(); else draw(); });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,15 @@
+<div class="heat-controls" role="group" aria-label="Heat map appearance">
+  <div class="hc-int">
+    <label class="field-label" for="hc-int-{{ hc_id|default('a') }}">Intensity: <output data-heat-readout></output></label>
+    <div class="hc-range">
+      <span>Peaks only</span>
+      <input class="plain" type="range" id="hc-int-{{ hc_id|default('a') }}" min="0" max="100" step="1" value="65" data-heat-intensity>
+      <span>Lift quiet areas</span>
+    </div>
+  </div>
+  <div class="hc-pal">
+    <span class="field-label" id="hc-pal-l-{{ hc_id|default('a') }}">Colours</span>
+    <div class="palette-picker" role="group" aria-labelledby="hc-pal-l-{{ hc_id|default('a') }}" data-heat-palette></div>
+  </div>
+  <button class="btn" type="button" data-heat-reset>Reset</button>
+</div>

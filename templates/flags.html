@@ -1,0 +1,61 @@
+{% extends "base_app.html" %}
+{% block content %}
+<h1>What to fix first</h1>
+<p class="lede">{{ layout.label }}. Each zone is compared with the store median, and each flag says what was seen and what to try. Once a zone has history, its own usual pattern will replace the median.</p>
+
+<div class="split">
+  <section aria-labelledby="f-h">
+    <h2 id="f-h">Flags</h2>
+    {% if items %}
+    <ul class="findings">
+      {% for f in items %}
+      <li class="finding {{ f.tone }}"><h3>{{ f.kind }}</h3><p>{{ f.text }}</p></li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">No flags. Every zone is within its normal range.</p>
+    {% endif %}
+    {% if healthy %}
+    <h2 style="margin-top: 1.75rem">Within normal range</h2>
+    <ul class="findings">
+      {% for m in healthy %}<li class="finding good"><p>{{ m }}</p></li>{% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+
+  {% if has_checkout %}
+  <section class="panel" aria-labelledby="w-h">
+    <h2 id="w-h">Checkout wait over the day</h2>
+    <p>Estimated by dividing people in the checkout area by people served per minute (Little's law). Treat it as a guide during surges.</p>
+    <div class="chart" id="wait" data-plot style="height: 320px" role="img" aria-label="Estimated checkout wait in minutes across five-minute windows"></div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if has_checkout %}<script>
+document.addEventListener("DOMContentLoaded", function () {
+  let payload = null;
+  App.onRender(async function () {
+    if (!payload) payload = await App.getJSON("{{ url_for('api_checkout', ref=ref, key=layout.key) }}");
+    const w = payload.windows, thr = payload.threshold_min;
+    if (!w.length) { document.getElementById("wait").innerHTML = '<p class="empty">Not enough checkout activity yet to estimate waits.</p>'; return; }
+    const bad = App.css("--bad"), accent = App.css("--accent");
+    const xmax = Math.max(...w.map((r) => r.window_start_min)) + 5;
+    App.plot("wait", [{
+      type: "scatter", mode: "lines+markers", x: w.map((r) => r.window_start_min), y: w.map((r) => r.est_wait_min),
+      line: { color: accent, width: 2.5 }, marker: { size: 6, color: w.map((r) => r.est_wait_min >= thr ? bad : accent) },
+      customdata: w.map((r) => [r.occupancy, r.throughput_per_min]),
+      hovertemplate: "minute %{x:.0f}<br>%{y:.1f} min wait<br>%{customdata[0]:.1f} people, %{customdata[1]:.1f} served per min<extra></extra>",
+    }], App.baseLayout({
+      margin: { l: 52, r: 12, t: 8, b: 48 }, showlegend: false,
+      xaxis: { title: { text: "Minutes since opening", font: { size: 12 } }, gridcolor: App.css("--line"), zeroline: false, fixedrange: true },
+      yaxis: { title: { text: "Estimated wait (min)", font: { size: 12 } }, rangemode: "tozero", gridcolor: App.css("--line"), zeroline: false, fixedrange: true },
+      shapes: [{ type: "line", x0: 0, x1: xmax, y0: thr, y1: thr, line: { color: bad, width: 1.5, dash: "dash" } }],
+      annotations: [{ x: xmax, y: thr, text: thr + " min: open another till", showarrow: false, xanchor: "right", yanchor: "bottom", font: { size: 12, color: bad } }],
+    }));
+  });
+});
+</script>{% endif %}
+{% endblock %}

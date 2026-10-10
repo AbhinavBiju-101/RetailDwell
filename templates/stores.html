@@ -1,0 +1,23 @@
+{% extends "base_app.html" %}
+{% block content %}
+<h1>Your stores</h1>
+{% if stores %}
+<p class="lede">{% if can_edit %}Pick a store to see its heat maps and layout experiments, or add another.{% else %}Four simulated stores, each with its own floor plan and its own layout change to evaluate.{% endif %}</p>
+<ul class="store-list">
+  {% for s in stores %}
+  <li>
+    <a href="{{ url_for('overview', ref=s.ref) }}">
+      <span class="kind">{{ s.kind }}</span>
+      <strong>{{ s.name }}</strong>
+      <span class="blurb">{{ s.blurb or 'No description yet.' }}</span>
+      <span class="size">{{ '%g'|format(s.width_m) }} by {{ '%g'|format(s.height_m) }} m</span>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% if can_edit %}<p><a class="btn" href="{{ url_for('store_new') }}">Add a store</a></p>{% endif %}
+{% else %}
+<p class="lede">You have no stores yet. Add one, upload its floor plan, draw the zones, then connect a camera agent or upload a CSV of positions.</p>
+{% if can_edit %}<p><a class="btn primary" href="{{ url_for('store_new') }}">Add your first store</a></p>{% else %}<p class="empty">No demo stores were found. Run <code>python seed_demo.py</code> on the server.</p>{% endif %}
+{% endif %}
+{% endblock %}

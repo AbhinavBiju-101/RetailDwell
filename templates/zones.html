@@ -1,0 +1,74 @@
+{% extends "base_app.html" %}
+{% block content %}
+<h1>Zone by zone</h1>
+<p class="lede">{{ layout.label }}, {{ n_shoppers }} shoppers. Presence is time spent inside a zone. Engaged time counts only stops: staying within 1 m for 5 seconds or more at merchandise.</p>
+
+<div class="split">
+  <section aria-labelledby="tbl-h">
+    <h2 id="tbl-h" class="sr-only">Zone statistics</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th scope="col">Zone</th><th scope="col">Type</th><th scope="col">Shoppers reaching it</th>
+          <th scope="col">Share</th><th scope="col">Presence (s)</th><th scope="col">Engaged (s)</th><th scope="col">Stopped</th>
+        </tr></thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <th scope="row">{{ r.zone }}</th>
+            <td class="dim">{{ r.type }}</td>
+            <td>{{ r.visits_shoppers }}</td>
+            <td>{{ '%.0f'|format(r.visit_share * 100) }}%</td>
+            <td>{{ '%.0f'|format(r.presence_dwell_s) }}</td>
+            <td>{% if r.type == 'merchandise' or r.type == 'checkout' %}{{ '%.0f'|format(r.engaged_dwell_s) }}{% else %}<span class="dim">-</span>{% endif %}</td>
+            <td>{% if r.type == 'merchandise' %}{{ '%.0f'|format(r.stop_rate * 100) }}%{% else %}<span class="dim">-</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="map-note">Engaged time is averaged over the shoppers who reached the zone. Stopped is the share of those shoppers who paused at least once.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="q-h">
+    <h2 id="q-h">Reach against time spent</h2>
+    <p>Each merchandise zone sits in one of four groups. The dashed lines mark the median zone.</p>
+    <div class="chart" id="quad" data-plot style="height: 360px" role="img" aria-label="Scatter of share of shoppers reaching each zone against engaged time"></div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  let payload = null;
+  App.onRender(async function () {
+    if (!payload) payload = await App.getJSON("{{ url_for('api_zones', ref=ref, key=layout.key) }}");
+    const m = payload.stats.filter((r) => r.type === "merchandise");
+    const med = (a) => { const s = [...a].sort((x, y) => x - y), h = s.length / 2; return s.length % 2 ? s[Math.floor(h)] : (s[h - 1] + s[h]) / 2; };
+    const mx = med(m.map((r) => r.visit_share * 100)), my = med(m.map((r) => r.engaged_dwell_s));
+    const xs = m.map((r) => r.visit_share * 100), ys = m.map((r) => r.engaged_dwell_s);
+    const xr = [0, Math.max(100, ...xs) * 1.05], yr = [0, Math.max(...ys) * 1.35];
+    const ink = App.css("--ink"), line = App.css("--ink-2");
+    const q = (x, y, t, xa, ya) => ({ x, y, text: t, showarrow: false, xanchor: xa, yanchor: ya, font: { size: 12, color: line } });
+    App.plot("quad", [{
+      type: "scatter", mode: "markers+text", x: xs, y: ys, text: m.map((r) => r.zone), textposition: "top center",
+      textfont: { color: ink, size: 12 }, marker: { size: 13, color: App.css("--accent") },
+      hovertemplate: "%{text}<br>%{x:.0f}% of shoppers<br>%{y:.0f} s engaged<extra></extra>",
+    }], App.baseLayout({
+      margin: { l: 52, r: 12, t: 8, b: 48 }, showlegend: false,
+      xaxis: { title: { text: "Share of shoppers who reach the zone", font: { size: 12 } }, ticksuffix: "%", range: xr, gridcolor: App.css("--line"), zeroline: false, fixedrange: true },
+      yaxis: { title: { text: "Engaged time per visitor (s)", font: { size: 12 } }, range: yr, gridcolor: App.css("--line"), zeroline: false, fixedrange: true },
+      shapes: [
+        { type: "line", x0: mx, x1: mx, y0: yr[0], y1: yr[1], line: { color: line, width: 1, dash: "dash" } },
+        { type: "line", x0: xr[0], x1: xr[1], y0: my, y1: my, line: { color: line, width: 1, dash: "dash" } },
+      ],
+      annotations: [
+        q(xr[1], yr[1], "Hot: busy and engaging", "right", "top"), q(xr[0], yr[1], "Destination: few, but they stay", "left", "top"),
+        q(xr[1], yr[0], "Pass-through: busy, little stopping", "right", "bottom"), q(xr[0], yr[0], "Dead zone", "left", "bottom"),
+      ],
+    }));
+  });
+});
+</script>
+{% endblock %}

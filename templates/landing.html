@@ -1,0 +1,410 @@
+{% extends "base_public.html" %}
+{% block head %}<script>document.documentElement.classList.add("js")</script>
+<link rel="stylesheet" href="{{ url_for('static', filename='landing.css') }}">{% endblock %}
+
+{% block body %}
+<div class="deck-progress" aria-hidden="true"><span id="deck-bar"></span></div>
+
+<header class="site-head deck-head">
+  <a class="brand" href="#s-hero"><img src="{{ url_for('static', filename='favicon.svg') }}" alt="" width="34" height="34"><span class="bn">{{ brand }}<small>{{ tagline }}</small></span></a>
+  <nav aria-label="Account">
+    <button class="btn" id="theme-toggle" type="button" aria-pressed="false">Dark theme</button>
+    {% if user %}
+      <a class="btn primary" href="{{ url_for('stores') }}">Open your stores</a>
+    {% else %}
+      <a class="btn" href="{{ url_for('login') }}">Sign in</a>
+      <a class="btn primary" href="{{ url_for('signup') }}">Create account</a>
+    {% endif %}
+  </nav>
+</header>
+
+<nav class="deck-dots" id="deck-dots" aria-label="Slides"></nav>
+
+<main class="deck" id="main">
+
+<!-- 1 ============================================================ hero -->
+<section class="slide hero" id="s-hero" data-title="Start">
+  <div class="slide-in two">
+    <div class="rise">
+      <h1>Online stores have analytics. Physical stores have guesswork.</h1>
+      <p class="lede">{{ brand }} turns the cameras a store already owns into a floor-plan heat map. It shows where shoppers browse, where they queue and what gets ignored, then tells you whether a layout change actually worked.</p>
+      <p class="actions">
+        {% if user %}<a class="btn primary big" href="{{ url_for('stores') }}">Open your stores</a>
+        {% else %}<a class="btn primary big" href="{{ url_for('signup') }}">Create an account</a><a class="btn big" href="{{ url_for('login') }}">Sign in</a>{% endif %}
+        <a class="btn big ghost" href="#s-problem" data-next>See how it works</a>
+      </p>
+    </div>
+    <figure class="hero-plan rise">
+      <div class="wipe" id="lp-wipe" style="--p: 50%">
+        <canvas class="layer" id="lp-a" width="800" height="480" role="img" aria-label="Illustration: heat map of a small shop before its offers display moved"></canvas>
+        <canvas class="layer top" id="lp-b" width="800" height="480" role="img" aria-label="Illustration: the same shop after the offers display moved to the main aisle"></canvas>
+        <span class="tag l">Before</span><span class="tag r">After</span>
+        <div class="line" aria-hidden="true"></div>
+        <input type="range" min="2" max="98" value="50" id="lp-range" aria-label="Drag to compare the shop before and after the display moved">
+      </div>
+      <div class="hero-ctl">
+        <label class="field-label" for="lp-int">Intensity</label>
+        <input class="plain" type="range" id="lp-int" min="0" max="100" value="65" data-heat-intensity aria-describedby="lp-hint">
+        <div class="palette-picker mini" data-heat-palette role="group" aria-label="Heat map colours"></div>
+      </div>
+      <figcaption id="lp-hint">Drag the divider to compare, and try the intensity and colours. Illustration drawn from simulated shopper paths.</figcaption>
+    </figure>
+  </div>
+  <a class="scroll-cue" href="#s-problem" data-next aria-label="Scroll to the next slide"><span>Scroll for the full story</span><i aria-hidden="true"></i></a>
+</section>
+
+<!-- 2 ============================================================ problem -->
+<section class="slide" id="s-problem" data-title="The gap">
+  <div class="slide-in">
+    <h2 class="rise">Stores know what sold and roughly how many came in. Nobody knows what happened in between.</h2>
+    <p class="lead rise">Sales data shows that a section underperforms, not why. Each of these needs a different fix, and a till report cannot tell them apart. Pick one.</p>
+    <div class="trio rise" role="tablist" aria-label="Why a section underperforms">
+      <button class="fork" role="tab" aria-selected="true" data-fork="0"><span class="q">Nobody came</span><span class="a">The section is not on anyone's route.</span></button>
+      <button class="fork" role="tab" aria-selected="false" data-fork="1"><span class="q">They came but did not stop</span><span class="a">They walked past without seeing it.</span></button>
+      <button class="fork" role="tab" aria-selected="false" data-fork="2"><span class="q">They stopped but did not buy</span><span class="a">Interest without a sale.</span></button>
+    </div>
+    <div class="fork-detail rise" id="fork-detail" role="tabpanel" aria-live="polite">
+      <div class="fd" data-fd="0">
+        <svg viewBox="0 0 300 120" aria-hidden="true"><rect x="6" y="6" width="288" height="108" fill="none" class="ln"/><rect x="200" y="14" width="80" height="30" class="zone dead"/><path d="M14 90C70 90 120 78 180 80S260 86 290 84" class="route"/><path d="M14 66C80 62 130 62 190 64S250 60 290 58" class="route"/></svg>
+        <div><h3>A route problem</h3><p>Traffic flows around the section. {{ brand }} shows it as a dead zone: few visits and little time spent. Move it onto a main path, or fix the signage that points to it.</p></div>
+      </div>
+      <div class="fd" data-fd="1" hidden>
+        <svg viewBox="0 0 300 120" aria-hidden="true"><rect x="6" y="6" width="288" height="108" fill="none" class="ln"/><rect x="120" y="14" width="70" height="30" class="zone"/><path d="M14 70C80 66 130 60 170 62S250 60 290 56" class="route"/><circle cx="60" cy="68" r="3.4" class="dot"/><circle cx="110" cy="64" r="3.4" class="dot"/><circle cx="160" cy="62" r="3.4" class="dot"/><circle cx="215" cy="61" r="3.4" class="dot"/></svg>
+        <div><h3>A visibility problem</h3><p>Plenty of people pass, but dwell stays low. {{ brand }} flags it as a visibility problem or a pass-through. Raise the signage to sightline height, or use the spot for impulse items.</p></div>
+      </div>
+      <div class="fd" data-fd="2" hidden>
+        <svg viewBox="0 0 300 120" aria-hidden="true"><rect x="6" y="6" width="288" height="108" fill="none" class="ln"/><rect x="100" y="14" width="90" height="30" class="zone hot"/><path d="M14 80C60 76 90 60 130 54" class="route"/><circle cx="128" cy="56" r="3" class="dot"/><circle cx="131" cy="57" r="3" class="dot"/><circle cx="127" cy="58" r="3" class="dot"/><circle cx="133" cy="55" r="3" class="dot"/><path d="M135 56C190 70 230 92 290 96" class="route"/></svg>
+        <div><h3>An offer problem</h3><p>Shoppers stop and then leave. That points at price, stock or confusion rather than placement. With a point-of-sale feed this becomes a funnel; today {{ brand }} shows the stop, and you check the shelf.</p></div>
+      </div>
+    </div>
+  </div>
+  <p class="titleblock"><span>Sheet 2 of 13</span><strong>The gap</strong></p>
+</section>
+
+<!-- 3 ============================================================ walker -->
+<section class="slide alt" id="s-walker" data-title="The walker">
+  <div class="slide-in two">
+    <div class="rise">
+      <h2>We design for the hardest customer: someone who carries nothing and identifies nothing.</h2>
+      <p class="lead">No phone signal, no cart, no app. Alone or with family, free to wander, with a real wallet and no wish to be recognised. If a store can be understood from that shopper, every extra sensor is a bonus rather than a requirement.</p>
+      <ul class="obs" id="obs">
+        <li tabindex="0" data-o="where"><b>Where the body is</b><span>Position on the floor, over time.</span></li>
+        <li tabindex="0" data-o="how"><b>How it moves</b><span>Speed, direction, stopping, turning back.</span></li>
+        <li tabindex="0" data-o="who"><b>Who it moves with</b><span>Co-movement says family or friends.</span></li>
+        <li tabindex="0" data-o="ends"><b>Where it appears</b><span>The entrance and the checkout.</span></li>
+      </ul>
+      <p class="map-note">Everything {{ brand }} reports is derived from those four things.</p>
+    </div>
+    <figure class="rise walker" id="walker" data-focus="where">
+      <svg viewBox="0 0 520 340" role="img" aria-label="Top-down store plan showing one shopper's path with four things that can be observed">
+        <rect x="8" y="8" width="504" height="324" class="plan"/>
+        <rect x="8" y="130" width="14" height="80" class="door"/>
+        <rect x="430" y="250" width="72" height="62" class="zone till"/>
+        <rect x="70" y="30" width="130" height="62" class="zone"/>
+        <rect x="250" y="30" width="130" height="62" class="zone"/>
+        <rect x="140" y="236" width="150" height="62" class="zone"/>
+        <path id="wpath" class="wpath" d="M22 170C70 170 110 126 170 118S250 150 300 176 340 238 372 262 420 282 436 282"/>
+        <g class="g-where"><circle cx="22" cy="170" r="5"/><circle cx="170" cy="118" r="5"/><circle cx="300" cy="176" r="5"/><circle cx="372" cy="262" r="5"/></g>
+        <g class="g-how"><circle cx="52" cy="170" r="3"/><circle cx="96" cy="150" r="3"/><circle cx="136" cy="127" r="3"/><circle cx="168" cy="119" r="3"/><circle cx="173" cy="118" r="3"/><circle cx="177" cy="118" r="3"/><circle cx="181" cy="117" r="3"/><circle cx="222" cy="130" r="3"/><circle cx="270" cy="156" r="3"/><circle cx="318" cy="198" r="3"/><circle cx="350" cy="244" r="3"/></g>
+        <g class="g-who"><circle cx="300" cy="196" r="5"/><circle cx="318" cy="186" r="4"/><path d="M300 176 300 196M300 176 318 186" class="tie"/></g>
+        <g class="g-ends"><rect x="2" y="124" width="26" height="92" class="ring"/><rect x="424" y="244" width="84" height="74" class="ring"/></g>
+        <text x="36" y="226" class="t">entrance</text><text x="432" y="330" class="t">checkout</text>
+      </svg>
+      <figcaption>One anonymous visit. Hover a point on the left to light up what it adds.</figcaption>
+    </figure>
+  </div>
+  <p class="titleblock"><span>Sheet 3 of 13</span><strong>The anonymous walker</strong></p>
+</section>
+
+<!-- 4 ============================================================ cameras -->
+<section class="slide" id="s-cameras" data-title="Why cameras">
+  <div class="slide-in">
+    <h2 class="rise">Only a few sensors can see the shopper who carries nothing. Only cameras are already on the ceiling.</h2>
+    <p class="lead rise">Anything that depends on a phone, an app or a tag measures the shoppers who carry one. That is a biased sample. Hover a row to see why each approach was set aside or kept as an add-on.</p>
+    <div class="table-wrap rise">
+      <table class="cmp" id="cmp">
+        <thead><tr><th scope="col">Approach</th><th scope="col">Sees shoppers with no phone or token</th><th scope="col">Bias it adds</th><th scope="col">Privacy and legal risk</th><th scope="col">New hardware</th><th scope="col">Our use</th></tr></thead>
+        <tbody>
+          <tr class="us" tabindex="0" data-why="Position about 0.5 to 1 m near the centre of view, worse at distance and when blocked. Occlusion is the main weakness, so we report accuracy by zone, not by centimetre."><th scope="row">Existing CCTV and computer vision</th><td>Yes</td><td>Low</td><td>Low, when no video is stored</td><td>None</td><td>The base</td></tr>
+          <tr tabindex="0" data-why="Phones randomise Wi-Fi and Bluetooth addresses, and metal shelving blocks signals. Accuracy of a few metres, and only for people carrying a phone."><th scope="row">Wi-Fi and Bluetooth sniffing</th><td>No</td><td>Phone carriers only</td><td>High</td><td>Low to moderate</td><td>Set aside</td></tr>
+          <tr tabindex="0" data-why="Works only for customers who installed the app, and GPS fails indoors. Collecting device identifiers needs consent under India's DPDP Act."><th scope="row">Shopper app or beacons</th><td>No</td><td>App installers only</td><td>High</td><td>App development</td><td>Set aside</td></tr>
+          <tr tabindex="0" data-why="Very accurate counts, roughly 0.2 to 0.5 m. It needs purpose-built hardware over every area, which the brief and a mid-size budget rule out."><th scope="row">Overhead stereo sensors</th><td>Yes</td><td>Low</td><td>Low</td><td>High</td><td>Not required</td></tr>
+          <tr tabindex="0" data-why="Tokens handed out at the door create compliance bias: people refuse, forget or leave with them. A token is a per-visit identifier, and children cannot hold one."><th scope="row">Door tokens (RFID or logger)</th><td>No</td><td>Compliance and loss</td><td>Moderate</td><td>Moderate to high</td><td>Validation only</td></tr>
+          <tr tabindex="0" data-why="A few dollars per shelf. It confirms that nobody was at a shelf, which together with no camera dwell makes a very confident dead zone."><th scope="row">Shelf PIR and radar</th><td>Yes</td><td>None</td><td>Very low</td><td>Low per unit</td><td>Optional add-on</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="why rise" id="cmp-why" aria-live="polite">Hover or focus a row for the detail. Accuracy figures are typical ranges to be validated on each store's own footage.</p>
+  </div>
+  <p class="titleblock"><span>Sheet 4 of 13</span><strong>Why cameras</strong></p>
+</section>
+
+<!-- 5 ============================================================ privacy -->
+<section class="slide inv" id="s-privacy" data-title="Privacy">
+  <div class="slide-in two">
+    <div class="rise">
+      <h2>Positions, not people. The video is never stored.</h2>
+      <p class="lead">Video is a means, not the product. The camera agent reads the live stream frame by frame and keeps four numbers per detection. A week of footage that runs to hundreds of gigabytes becomes a few megabytes of coordinates.</p>
+      <ul class="ticks">
+        <li>No face recognition, ever.</li>
+        <li>Track numbers are short-lived and never matched across days.</li>
+        <li>No phone identifiers, which would need consent under India's DPDP Act.</li>
+        <li>Labels such as loiterer describe groups of visits. There are no alerts about individuals, because that would turn analytics into surveillance.</li>
+      </ul>
+    </div>
+    <div class="rise">
+      <div class="shred" id="shred" data-state="frame">
+        <div class="shred-top">
+          <svg class="frame" viewBox="0 0 800 480" aria-hidden="true">
+            <use href="#cctv-scene" />
+          </svg>
+          <div class="rec" aria-hidden="true"><i>track_id</i><i>t</i><i>x</i><i>y</i></div>
+        </div>
+        <div class="shred-ctl" role="group" aria-label="What is kept">
+          <button type="button" class="btn" data-set="frame" aria-pressed="true">What the camera sees</button>
+          <button type="button" class="btn" data-set="kept" aria-pressed="false">What {{ brand }} keeps</button>
+        </div>
+        <p class="shred-note" id="shred-note" aria-live="polite">The agent detects people in each frame.</p>
+        <table class="kept-table" aria-label="One stored row">
+          <thead><tr><th>track_id</th><th>t (s)</th><th>x (m)</th><th>y (m)</th></tr></thead>
+          <tbody><tr><td>1042</td><td>312.5</td><td>6.2</td><td>3.1</td></tr><tr><td>1042</td><td>313.0</td><td>6.2</td><td>3.2</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <p class="titleblock"><span>Sheet 5 of 13</span><strong>Privacy by design</strong></p>
+</section>
+
+<!-- 6 ============================================================ pipeline -->
+<section class="slide" id="s-pipeline" data-title="Pipeline">
+  <div class="slide-in">
+    <h2 class="rise">From a camera frame to a floor coordinate.</h2>
+    <p class="lead rise">Hover a person in the camera view to see where the same visitor lands on the store plan. The system stores only that second picture.</p>
+    <div class="feedplan rise">
+      <figure class="feed">
+        <svg viewBox="0 0 800 480" id="feed" role="img" aria-label="Illustration of a security camera view with detected people">
+          <use href="#cctv-scene" />
+          <g class="boxes">
+            <g class="pbox" data-p="a" tabindex="0"><rect x="318" y="204" width="46" height="104"/><text x="322" y="199">ID 14</text></g>
+            <g class="pbox" data-p="b" tabindex="0"><rect x="446" y="226" width="40" height="86"/><text x="450" y="221">ID 15</text></g>
+            <g class="pbox" data-p="c" tabindex="0"><rect x="222" y="262" width="62" height="148"/><text x="226" y="257">ID 12</text></g>
+            <g class="pbox" data-p="d" tabindex="0"><rect x="548" y="276" width="56" height="130"/><text x="552" y="271">ID 16</text></g>
+          </g>
+        </svg>
+        <figcaption>Camera view with detections. Illustration.</figcaption>
+      </figure>
+      <div class="arrow" aria-hidden="true"><span>homography</span><svg viewBox="0 0 80 24"><path d="M2 12h68M60 4l10 8-10 8"/></svg></div>
+      <figure class="plan2">
+        <svg viewBox="0 0 400 300" id="plan2" role="img" aria-label="Top-down store plan with the same visitors as dots">
+          <rect x="4" y="4" width="392" height="292" class="plan"/>
+          <rect x="30" y="30" width="110" height="46" class="zone"/><rect x="260" y="30" width="110" height="46" class="zone"/>
+          <rect x="30" y="216" width="110" height="52" class="zone"/><rect x="300" y="228" width="80" height="50" class="zone till"/>
+          <g class="pdot" data-p="a"><circle cx="190" cy="150" r="7"/></g>
+          <g class="pdot" data-p="b"><circle cx="232" cy="130" r="7"/></g>
+          <g class="pdot" data-p="c"><circle cx="124" cy="190" r="7"/></g>
+          <g class="pdot" data-p="d"><circle cx="318" cy="198" r="7"/></g>
+        </svg>
+        <figcaption id="feed-read" aria-live="polite">Store plan, in metres. Pick a person on the left.</figcaption>
+      </figure>
+    </div>
+    <ol class="stages rise" id="stages">
+      <li><button type="button" aria-selected="true" data-st="0">Sample</button></li>
+      <li><button type="button" aria-selected="false" data-st="1">Detect and track</button></li>
+      <li><button type="button" aria-selected="false" data-st="2">Map to the floor</button></li>
+      <li><button type="button" aria-selected="false" data-st="3">Zones and dwell</button></li>
+      <li><button type="button" aria-selected="false" data-st="4">Store and compare</button></li>
+    </ol>
+    <div class="stage-detail rise" id="stage-detail" aria-live="polite"></div>
+  </div>
+  <p class="titleblock"><span>Sheet 6 of 13</span><strong>Pipeline</strong></p>
+</section>
+
+<!-- 7 ============================================================ dwell quadrants -->
+<section class="slide alt" id="s-dwell" data-title="Visits and dwell">
+  <div class="slide-in two">
+    <div class="rise">
+      <h2>Footfall alone misleads. Visits against time spent tells you what to do.</h2>
+      <p class="lead">A stop is staying within about one metre for five seconds or more, so dwell does not depend on carrying anything. Every merchandise zone lands in one of four groups, and each one calls for a different move.</p>
+      <p class="map-note">Presence time (inside a zone) and engaged time (stopped in front of merchandise) are kept separate, so someone resting by the door never inflates a display's numbers.</p>
+    </div>
+    <div class="quad rise" id="quad">
+      <div class="axis y">More time spent</div><div class="axis x">More visits</div>
+      <button class="q q-d" type="button" data-q="Destination"><b>Destination</b><span>Few come, but they stay. Add seating, demos or staff.</span></button>
+      <button class="q q-h" type="button" data-q="Hot"><b>Hot zone</b><span>Busy and engaging. Protect its footprint.</span></button>
+      <button class="q q-x" type="button" data-q="Dead"><b>Dead zone</b><span>Few visits, little time. Relocate, redesign or fix signage.</span></button>
+      <button class="q q-p" type="button" data-q="Pass"><b>Pass-through</b><span>Busy but brief. A good spot for impulse items and promotions.</span></button>
+    </div>
+  </div>
+  <p class="titleblock"><span>Sheet 7 of 13</span><strong>Visits and dwell</strong></p>
+</section>
+
+<!-- 8 ============================================================ mission -->
+<section class="slide" id="s-mission" data-title="Shopper mission">
+  <div class="slide-in">
+    <h2 class="rise">The same stop means different things for different shoppers.</h2>
+    <p class="lead rise">Attention and purchase are separate. The hidden third variable is the shopper's mission, and cameras can read it from movement alone. Averaging the two kinds of shopper hides both patterns.</p>
+    <div class="mission rise" id="mission">
+      <button class="mcard" type="button" data-m="directed" aria-pressed="true">
+        <svg viewBox="0 0 260 130" aria-hidden="true"><rect x="3" y="3" width="254" height="124" class="plan"/><path d="M10 64C60 62 130 60 250 56" class="route"/><circle cx="118" cy="61" r="4" class="dot"/></svg>
+        <b>Directed</b><span>Direct path, few stops, short visit. Knew what they wanted and grabbed it.</span>
+      </button>
+      <button class="mcard" type="button" data-m="exploratory" aria-pressed="false">
+        <svg viewBox="0 0 260 130" aria-hidden="true"><rect x="3" y="3" width="254" height="124" class="plan"/><path d="M10 100C40 30 70 30 90 70S130 120 150 60 200 20 250 90" class="route"/><circle cx="62" cy="42" r="4" class="dot"/><circle cx="104" cy="92" r="4" class="dot"/><circle cx="150" cy="60" r="4" class="dot"/><circle cx="196" cy="34" r="4" class="dot"/><circle cx="236" cy="78" r="4" class="dot"/></svg>
+        <b>Exploratory</b><span>Meandering path, many stop-and-go moments, backtracking, longer visit.</span>
+      </button>
+      <button class="mcard" type="button" data-m="loiterer" aria-pressed="false">
+        <svg viewBox="0 0 260 130" aria-hidden="true"><rect x="3" y="3" width="254" height="124" class="plan"/><rect x="8" y="44" width="16" height="44" class="door"/><circle cx="46" cy="66" r="4" class="dot"/><circle cx="50" cy="70" r="4" class="dot"/><circle cx="44" cy="72" r="4" class="dot"/><circle cx="52" cy="64" r="4" class="dot"/></svg>
+        <b>Loiterer or waiter</b><span>One long stop near the door, seating or empty floor. Reported as a segment of its own, never as an alert.</span>
+      </button>
+    </div>
+    <div class="mission-note rise" id="mission-note" aria-live="polite"></div>
+  </div>
+  <p class="titleblock"><span>Sheet 8 of 13</span><strong>Shopper mission</strong></p>
+</section>
+
+<!-- 9 ============================================================ bottleneck -->
+<section class="slide inv" id="s-queue" data-title="Queues">
+  <div class="slide-in two">
+    <div class="rise">
+      <h2>A queue is not a crowd. Throughput tells them apart.</h2>
+      <p class="lead">A busy aisle full of happy browsers should not trigger a bottleneck alarm. For choke points such as the till, {{ brand }} measures how many people are waiting and how many are served each minute, then estimates the wait with Little's law: people waiting divided by people served per minute.</p>
+      <p class="map-note">Little's law assumes a steady state, so treat the number as a guide during surges. Try it.</p>
+    </div>
+    <div class="calc rise" id="calc">
+      <div class="calc-row"><label for="c-l">People in the queue area</label><output id="c-lo">6</output><input class="plain" id="c-l" type="range" min="0" max="20" step="1" value="6"></div>
+      <div class="calc-row"><label for="c-r">People served per minute</label><output id="c-ro">1.5</output><input class="plain" id="c-r" type="range" min="0.5" max="4" step="0.1" value="1.5"></div>
+      <div class="gauge" aria-hidden="true"><span id="c-bar"></span><i class="thr"></i></div>
+      <p class="verdict" id="c-verdict" aria-live="polite"></p>
+    </div>
+  </div>
+  <p class="titleblock"><span>Sheet 9 of 13</span><strong>Queues and bottlenecks</strong></p>
+</section>
+
+<!-- 10 =========================================================== experiment -->
+<section class="slide" id="s-experiment" data-title="Experiments">
+  <div class="slide-in two">
+    <div class="rise">
+      <h2>Did the move work? Compare shares, not counts.</h2>
+      <p class="lead">Most tools show a heat map. Few say whether a change helped. {{ brand }} compares the share of shoppers who stopped at a display before and after, so a busy Saturday never looks like a successful move. Suppliers who pay for display space want exactly this proof.</p>
+      <p class="map-note">Results come with a likely range, and show association, not proof. The cleanest test compares days of the same type with the same promotions.</p>
+    </div>
+    <div class="calc rise" id="norm">
+      <div class="norm-grid">
+        <div><b>Before</b><span id="n-a">200 shoppers, 60 stopped</span><em>30%</em></div>
+        <div><b>After</b><span id="n-b"></span><em id="n-bs"></em></div>
+      </div>
+      <div class="calc-row"><label for="n-t">Shoppers on the day after</label><output id="n-to">300</output><input class="plain" id="n-t" type="range" min="120" max="400" step="10" value="300"></div>
+      <div class="calc-row"><label for="n-s">Stopped at the display on the day after</label><output id="n-so">90</output><input class="plain" id="n-s" type="range" min="20" max="200" step="2" value="90"></div>
+      <div class="lifts">
+        <div><span>Raw count</span><strong id="n-raw"></strong></div>
+        <div class="real"><span>Share of shoppers</span><strong id="n-share"></strong></div>
+      </div>
+      <p class="verdict" id="n-verdict" aria-live="polite"></p>
+    </div>
+  </div>
+  <p class="titleblock"><span>Sheet 10 of 13</span><strong>Layout experiments</strong></p>
+</section>
+
+<!-- 11 =========================================================== diagnostician -->
+<section class="slide alt" id="s-flags" data-title="Diagnosis">
+  <div class="slide-in">
+    <h2 class="rise">Every flag explains itself, in words a store manager can act on.</h2>
+    <p class="lead rise">Each zone is compared with the rest of the store, and later with its own usual pattern for that time of day. The message says what was seen and what to try.</p>
+    <div class="flagrow rise" id="flagrow">
+      <article class="flag bad" tabindex="0"><h3>Dead zone</h3><p>Visits well below the store median and dwell well below as well. Few people come and those who do leave quickly. Relocate it, or redesign the display and signage.</p></article>
+      <article class="flag warn" tabindex="0"><h3>Visibility problem</h3><p>Visits well below the median but dwell normal. People are not seeing it. Move signage to sightline height or closer to the main path.</p></article>
+      <article class="flag info" tabindex="0"><h3>Pass-through</h3><p>Visits above the median but dwell below. Shoppers cross it without stopping. A good spot for impulse items and promotions.</p></article>
+      <article class="flag info" tabindex="0"><h3>Destination</h3><p>Average visits but dwell well above the median. People come specifically for it. Consider seating, demos or staff.</p></article>
+      <article class="flag good" tabindex="0"><h3>Hot zone</h3><p>High visits and high dwell. An engaged zone. Protect its footprint.</p></article>
+    </div>
+    <p class="map-note rise">Labels carry a confidence and describe groups of visits. A resting shopper can look like a loiterer, so nothing here ever becomes an alert about a person.</p>
+  </div>
+  <p class="titleblock"><span>Sheet 11 of 13</span><strong>Diagnosis</strong></p>
+</section>
+
+<!-- 12 =========================================================== honesty -->
+<section class="slide" id="s-trust" data-title="Accuracy">
+  <div class="slide-in two">
+    <div class="rise">
+      <h2>Most computer-vision demos show overlays. We show what we measured and what we do not claim.</h2>
+      <p class="lead">Accuracy is stated by zone, not by centimetre. Before a store relies on a number, it is checked against a hand-annotated clip of its own footage.</p>
+    </div>
+    <div class="twocol rise">
+      <div><h3>What we report</h3>
+        <ul class="plus"><li>Dwell error per zone, in seconds and percent</li><li>Count error at the entrance and the checkout</li><li>Track ID switches per minute at the chosen frame rate</li><li>Journey completeness, entrance to checkout</li><li>Classification accuracy for shopper missions on scripted clips</li></ul></div>
+      <div><h3>What we do not claim</h3>
+        <ul class="minus"><li>Centimetre-level positions</li><li>That a path caused a purchase. It is correlation</li><li>Certain journeys. They are probable, with a confidence figure</li><li>Conversion without a point-of-sale feed</li><li>Identity across visits or across days</li></ul></div>
+    </div>
+  </div>
+  <p class="titleblock"><span>Sheet 12 of 13</span><strong>Accuracy and limits</strong></p>
+</section>
+
+<!-- 13 =========================================================== roadmap + CTA -->
+<section class="slide inv" id="s-start" data-title="Start">
+  <div class="slide-in">
+    <h2 class="rise">What works today, and what comes next.</h2>
+    <div class="road rise">
+      <div><h3>Working now</h3><ul><li>Heat maps, zone dwell and visit types</li><li>Layout experiments normalised for traffic</li><li>Checkout wait estimates</li><li>Plain-language flags</li><li>Accounts, floor plans, zone editor, CSV upload</li><li>An ingest API with per-store keys</li></ul></div>
+      <div><h3>Next</h3><ul><li>The live camera agent: detection, tracking and floor mapping from an RTSP stream</li><li>Accuracy checks on a taped-off mock store</li><li>Time-of-day baselines for each zone</li></ul></div>
+      <div><h3>Later</h3><ul><li>Several overlapping cameras on one floor plan</li><li>Point-of-sale matching for revenue per visitor</li><li>Layout what-if simulation</li><li>Optional shelf and radar anchors</li></ul></div>
+    </div>
+    <div class="cta-row rise">
+      <p class="big-line">Try it on your own floor plan, or sign in to the demo stores.</p>
+      <p class="actions">
+        {% if user %}<a class="btn primary big" href="{{ url_for('stores') }}">Open your stores</a>
+        {% else %}<a class="btn primary big" href="{{ url_for('signup') }}">Create an account</a><a class="btn big" href="{{ url_for('login') }}">Sign in</a>{% endif %}
+      </p>
+    </div>
+  </div>
+  <p class="titleblock"><span>Sheet 13 of 13</span><strong>Start</strong></p>
+</section>
+
+<footer class="site-foot"><p>Anonymous positions only. No video is stored, no faces are recognised, and nobody is tracked as an individual. Figures on this page are illustrations unless a store has validated them on its own footage.</p></footer>
+</main>
+
+<!-- shared illustration: a security-camera view of a shop aisle (drawn, not a photograph) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <linearGradient id="cc-floor" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#6c767b"/><stop offset="1" stop-color="#8d979b"/></linearGradient>
+    <linearGradient id="cc-wall" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9aa4a7"/><stop offset="1" stop-color="#7c868a"/></linearGradient>
+    <linearGradient id="cc-shelfL" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#2d363b"/><stop offset="1" stop-color="#4a565c"/></linearGradient>
+    <linearGradient id="cc-shelfR" x1="1" y1="0" x2="0" y2="0"><stop offset="0" stop-color="#2d363b"/><stop offset="1" stop-color="#4a565c"/></linearGradient>
+    <radialGradient id="cc-vig" cx="50%" cy="50%" r="70%"><stop offset="0.55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".55"/></radialGradient>
+    <filter id="cc-grain" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="4"/><feColorMatrix type="matrix" values="0 0 0 0 .5  0 0 0 0 .5  0 0 0 0 .5  0 0 0 .22 0"/></filter>
+    <filter id="cc-soft"><feGaussianBlur stdDeviation="1.1"/></filter>
+    <symbol id="cc-person" viewBox="-16 -84 32 84" overflow="visible">
+      <ellipse cx="0" cy="-1" rx="12" ry="3" fill="#000" opacity=".28"/>
+      <rect x="-9" y="-40" width="7" height="39" rx="3" fill="#1c2327"/><rect x="2" y="-40" width="7" height="39" rx="3" fill="#232c31"/>
+      <path d="M-13 -44c0-12 5-18 13-18s13 6 13 18v10c0 3-3 3-3 0v-8l-2 18H-8l-2-18v8c0 3-3 3-3 0z" fill="#3b4950"/>
+      <circle cx="0" cy="-71" r="7.5" fill="#c1a58f"/><path d="M-7.6 -73c1-6 14-6 15.2 0-3-2-12-2-15.2 0z" fill="#2a2420"/>
+    </symbol>
+    <g id="cctv-scene">
+      <rect width="800" height="480" fill="#566066"/>
+      <rect x="250" y="40" width="300" height="140" fill="url(#cc-wall)"/>
+      <rect x="276" y="64" width="248" height="14" fill="#c9d3d6" opacity=".55"/>
+      <g opacity=".9"><rect x="282" y="92" width="60" height="38" fill="#b86a4a"/><rect x="350" y="92" width="60" height="38" fill="#4a7ab8"/><rect x="418" y="92" width="60" height="38" fill="#d6b34a"/><rect x="486" y="92" width="30" height="38" fill="#5aa17a"/></g>
+      <polygon points="250,176 550,176 740,480 60,480" fill="url(#cc-floor)"/>
+      <polygon points="250,176 280,176 150,480 0,480 0,420" fill="#7e888c" opacity=".0"/>
+      <polygon points="0,40 250,40 250,176 0,420" fill="#6f7a7f"/>
+      <polygon points="800,40 550,40 550,176 800,420" fill="#6f7a7f"/>
+      <polygon points="40,150 250,118 250,176 40,330" fill="url(#cc-shelfL)"/>
+      <polygon points="760,150 550,118 550,176 760,330" fill="url(#cc-shelfR)"/>
+      <g opacity=".95"><polygon points="62,176 250,140 250,152 62,198" fill="#c8553d"/><polygon points="62,214 250,168 250,178 62,240" fill="#3f7fc4"/><polygon points="62,252 250,196 250,204 62,278" fill="#e0b441"/>
+      <polygon points="738,176 550,140 550,152 738,198" fill="#58a67f"/><polygon points="738,214 550,168 550,178 738,240" fill="#c8553d"/><polygon points="738,252 550,196 550,204 738,278" fill="#3f7fc4"/></g>
+      <polygon points="40,150 250,118 250,100 40,86" fill="#222b30"/><polygon points="760,150 550,118 550,100 760,86" fill="#222b30"/>
+      <g fill="#e8eef0" opacity=".7"><rect x="330" y="8" width="140" height="8" rx="4"/><rect x="120" y="14" width="90" height="6" rx="3"/><rect x="590" y="14" width="90" height="6" rx="3"/></g>
+      <g filter="url(#cc-soft)">
+        <use href="#cc-person" x="318" y="204" width="46" height="104"/>
+        <use href="#cc-person" x="446" y="226" width="40" height="86"/>
+        <use href="#cc-person" x="222" y="262" width="62" height="148"/>
+        <use href="#cc-person" x="548" y="276" width="56" height="130"/>
+      </g>
+      <rect width="800" height="480" fill="url(#cc-vig)"/>
+      <rect width="800" height="480" filter="url(#cc-grain)"/>
+      <g font-family="ui-monospace,Menlo,Consolas,monospace" font-size="15" fill="#e9f2f0" opacity=".9"><circle cx="30" cy="30" r="6" fill="#e5484d"/><text x="44" y="36">REC</text><text x="600" y="36">CAM 02  14:32:07</text></g>
+    </g>
+  </defs>
+</svg>
+{% endblock %}
+
+{% block scripts %}<script src="{{ url_for('static', filename='landing.js') }}" defer></script>{% endblock %}

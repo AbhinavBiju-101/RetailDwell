@@ -1,0 +1,117 @@
+{% extends "base_app.html" %}
+{% block content %}
+<h1>Zones for {{ layout.key }}: {{ layout.label }}</h1>
+<p class="lede">Each zone is a rectangle, in metres from the bottom-left corner of the floor. Draw on the plan with the rectangle tool, or type the numbers. Use the same name for a display in two layouts to compare it.</p>
+
+<div class="split">
+  <section>
+    <div class="map-frame">
+      <div class="map" id="editor" data-plot role="img" aria-label="Floor plan with the zones drawn on it"></div>
+      <p class="map-note">Pick the rectangle tool at the top right of the plan, then drag. Zones you draw are added to the list.{% if not has_plan %} Upload a floor plan in <a href="{{ url_for('settings', ref=ref) }}">settings</a> to draw over it.{% endif %}</p>
+    </div>
+  </section>
+  <section>
+    <form method="post" id="zone-form" novalidate>
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="zones" id="zones-json">
+      <label class="field-label" for="label">Layout name</label>
+      <input class="text" id="label" name="label" value="{{ layout.label }}">
+      <div class="table-wrap" style="margin-top: 1rem">
+        <table class="edit" id="zone-table">
+          <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">x0</th><th scope="col">y0</th><th scope="col">x1</th><th scope="col">y1</th><th><span class="sr-only">Remove</span></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="toolbar">
+        <button class="btn" type="button" id="add-zone">Add a zone</button>
+        <button class="btn primary" type="submit">Save zones</button>
+      </p>
+      <p class="map-note">Types: merchandise is a display or shelf, checkout is the till area (queue waits are measured here), entrance is the door, seating is where people wait or sit.</p>
+    </form>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const W = {{ store.width_m|tojson }}, H = {{ store.height_m|tojson }};
+  const TYPES = {{ zone_types|tojson }};
+  const PLAN = {{ (url_for('plan_image', ref=ref) if has_plan else '')|tojson }};
+  const tbody = document.querySelector("#zone-table tbody");
+  const rows = {{ rows|tojson }};
+  const COLORS = { merchandise: "#2347D6", checkout: "#C2255C", entrance: "#1F7A3E", seating: "#E67700" };
+
+  function addRow(r) {
+    const tr = document.createElement("tr");
+    const num = (k) => '<td><input type="number" step="0.1" min="0" data-k="' + k + '" value="' + (+r[k]).toFixed(1) + '" aria-label="' + k + '"></td>';
+    tr.innerHTML = '<td><input type="text" data-k="name" maxlength="40" value="" aria-label="Zone name"></td>' +
+      '<td><select data-k="type" aria-label="Zone type">' + TYPES.map((t) => '<option' + (t === r.type ? " selected" : "") + ">" + t + "</option>").join("") + "</select></td>" +
+      num("x0") + num("y0") + num("x1") + num("y1") +
+      '<td><button class="btn" type="button" data-del aria-label="Remove zone">Remove</button></td>';
+    tr.querySelector('[data-k="name"]').value = r.name;
+    tr.querySelectorAll("input,select").forEach((el) => el.addEventListener("change", redraw));
+    tr.querySelector("[data-del]").addEventListener("click", () => { tr.remove(); redraw(); });
+    tbody.appendChild(tr);
+  }
+  function read() {
+    return [...tbody.querySelectorAll("tr")].map((tr) => {
+      const o = {};
+      tr.querySelectorAll("[data-k]").forEach((el) => { o[el.dataset.k] = el.type === "number" ? parseFloat(el.value) : el.value.trim(); });
+      return o;
+    });
+  }
+  function uniqueName(base) {
+    const have = new Set(read().map((r) => r.name));
+    let i = 1; while (have.has(base + " " + i)) i++;
+    return base + " " + i;
+  }
+
+  function redraw() {
+    if (!window.Plotly) return;
+    const zs = read();
+    const shapes = zs.filter((z) => [z.x0, z.y0, z.x1, z.y1].every(Number.isFinite)).map((z) => ({
+      type: "rect", x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1, editable: false,
+      line: { color: COLORS[z.type] || "#444", width: 2 }, fillcolor: (COLORS[z.type] || "#444") + "26",
+    }));
+    const notes = zs.filter((z) => Number.isFinite(z.x0)).map((z) => ({ x: (z.x0 + z.x1) / 2, y: z.y1, text: z.name, showarrow: false, yanchor: "top",
+      font: { size: 12, color: App.css("--ink") }, bgcolor: "rgba(255,255,255,0.0)" }));
+    const lay = App.baseLayout({
+      margin: { l: 44, r: 12, t: 6, b: 32 }, shapes: shapes, annotations: notes, dragmode: "drawrect",
+      newshape: { line: { color: "#2347D6", width: 2 }, fillcolor: "rgba(35,71,214,0.15)" },
+      xaxis: { range: [0, W], constrain: "domain", ticksuffix: " m", showgrid: true, gridcolor: App.css("--line"), zeroline: false },
+      yaxis: { range: [0, H], scaleanchor: "x", ticksuffix: " m", showgrid: true, gridcolor: App.css("--line"), zeroline: false },
+    });
+    if (PLAN) lay.images = [{ source: PLAN, xref: "x", yref: "y", x: 0, y: H, sizex: W, sizey: H, xanchor: "left", yanchor: "top", sizing: "stretch", layer: "below", opacity: 0.85 }];
+    const el = document.getElementById("editor");
+    Plotly.react(el, [{ type: "scatter", x: [0, W], y: [0, H], mode: "markers", marker: { opacity: 0 }, hoverinfo: "skip", showlegend: false }], lay,
+      { displayModeBar: true, displaylogo: false, responsive: true, modeBarButtonsToAdd: ["drawrect", "eraseshape"], modeBarButtonsToRemove: ["zoom2d", "pan2d", "select2d", "lasso2d", "zoomIn2d", "zoomOut2d", "autoScale2d", "resetScale2d"] });
+    if (!el.dataset.bound) {
+      el.dataset.bound = "1";
+      el.on("plotly_relayout", (ev) => {
+        // a rectangle just drawn arrives as a new shape beyond the ones we render
+        const n = (el.layout.shapes || []).length;
+        if (n > read().filter((z) => [z.x0, z.y0, z.x1, z.y1].every(Number.isFinite)).length) {
+          const s = el.layout.shapes[n - 1];
+          const cl = (v, m) => Math.max(0, Math.min(m, v));
+          const x0 = cl(Math.min(s.x0, s.x1), W), x1 = cl(Math.max(s.x0, s.x1), W);
+          const y0 = cl(Math.min(s.y0, s.y1), H), y1 = cl(Math.max(s.y0, s.y1), H);
+          addRow({ name: uniqueName("Zone"), type: "merchandise", x0: Math.round(x0 * 10) / 10, y0: Math.round(y0 * 10) / 10, x1: Math.round(x1 * 10) / 10, y1: Math.round(y1 * 10) / 10 });
+          redraw();
+        }
+      });
+    }
+  }
+
+  rows.forEach(addRow);
+  document.getElementById("add-zone").addEventListener("click", () => {
+    addRow({ name: uniqueName("Zone"), type: "merchandise", x0: 1, y0: 1, x1: Math.min(3, W), y1: Math.min(2.5, H) });
+    redraw();
+  });
+  document.getElementById("zone-form").addEventListener("submit", () => {
+    document.getElementById("zones-json").value = JSON.stringify(read());
+  });
+  App.onRender(redraw);
+});
+</script>
+{% endblock %}

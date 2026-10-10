@@ -1,0 +1,127 @@
+{% extends "base_app.html" %}
+{% block content %}
+<h1>Settings</h1>
+<p class="lede">Store details, floor plan, layouts and the keys that let camera agents send data.</p>
+
+<section class="block" aria-labelledby="s-store">
+  <h2 id="s-store">Store</h2>
+  <form method="post" action="{{ url_for('settings_store', ref=ref) }}" class="form wideform" novalidate>
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label class="field-label" for="name">Name</label>
+    <input class="text" id="name" name="name" value="{{ store.name }}" required>
+    <label class="field-label" for="kind">Type</label>
+    <input class="text" id="kind" name="kind" value="{{ store.kind }}">
+    <div class="pair">
+      <div><label class="field-label" for="width_m">Width (m)</label><input class="text" id="width_m" name="width_m" type="number" step="0.5" min="3" max="200" value="{{ '%g'|format(store.width_m) }}"></div>
+      <div><label class="field-label" for="height_m">Depth (m)</label><input class="text" id="height_m" name="height_m" type="number" step="0.5" min="3" max="200" value="{{ '%g'|format(store.height_m) }}"></div>
+    </div>
+    <label class="field-label" for="window_s">Queue window (seconds). Shorter windows suit busy tills, longer ones quiet stores.</label>
+    <input class="text" id="window_s" name="window_s" type="number" min="60" max="1800" step="30" value="{{ store.window_s or 300 }}">
+    <div><button class="btn primary" type="submit">Save store</button></div>
+  </form>
+</section>
+
+<section class="block" aria-labelledby="s-plan">
+  <h2 id="s-plan">Floor plan</h2>
+  {% if store.plan_path %}<img class="plan-thumb" src="{{ url_for('plan_image', ref=ref) }}" alt="Floor plan of {{ store.name }}">{% endif %}
+  <form method="post" action="{{ url_for('settings_plan', ref=ref) }}" enctype="multipart/form-data" class="form wideform">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label class="field-label" for="plan">PNG or JPEG, up to 5 MB. It is stretched to the store size, so crop it to the floor area.</label>
+    <input id="plan" name="plan" type="file" accept="image/png,image/jpeg" required>
+    <div><button class="btn" type="submit">{{ 'Replace floor plan' if store.plan_path else 'Upload floor plan' }}</button></div>
+  </form>
+</section>
+
+<section class="block" aria-labelledby="s-lay">
+  <h2 id="s-lay">Layouts and recordings</h2>
+  <p>A layout is one arrangement of the store with its own zones. Each layout has recordings of positions. The newest recording is the one analysed.</p>
+  <ul class="rows">
+    {% for l in layouts %}
+    <li>
+      <div class="row-main">
+        <strong>{{ l.key }}: {{ l.label }}</strong>
+        <span class="dim">{{ l.zones|length }} zones.
+          {% if l.dataset %}Recording "{{ l.dataset.label }}" has {{ '{:,}'.format(l.dataset.n_points or 0) }} points.{% else %}No recording yet.{% endif %}</span>
+      </div>
+      <div class="row-actions">
+        <a class="btn" href="{{ url_for('zone_editor', ref=ref, key=l.key) }}">Edit zones</a>
+        <details class="inline">
+          <summary class="btn">Upload CSV</summary>
+          <form method="post" action="{{ url_for('upload_recording', ref=ref, key=l.key) }}" enctype="multipart/form-data" class="form">
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            <label class="field-label" for="f-{{ l.key }}">CSV or .csv.gz with columns track_id, t, x, y (seconds, metres)</label>
+            <input id="f-{{ l.key }}" name="file" type="file" accept=".csv,.gz,text/csv" required>
+            <label class="field-label" for="lbl-{{ l.key }}">Recording name</label>
+            <input class="text" id="lbl-{{ l.key }}" name="label" placeholder="Saturday 12 Oct">
+            <button class="btn primary" type="submit">Upload</button>
+          </form>
+        </details>
+        {% if layouts|length > 1 %}
+        <form method="post" action="{{ url_for('layout_delete', ref=ref, key=l.key) }}" onsubmit="return confirm('Delete layout {{ l.key }} and its recordings?')">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="btn danger" type="submit">Delete</button>
+        </form>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  <details class="inline">
+    <summary class="btn">Add a layout</summary>
+    <form method="post" action="{{ url_for('layout_new', ref=ref) }}" class="form">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <label class="field-label" for="nk">Key (a short code such as B)</label>
+      <input class="text" id="nk" name="key" maxlength="8" required>
+      <label class="field-label" for="nl">Name</label>
+      <input class="text" id="nl" name="label" placeholder="Offers moved to the aisle">
+      <label class="field-label" for="nc">Start from</label>
+      <select id="nc" name="copy_from"><option value="">Empty layout</option>{% for l in layouts %}<option value="{{ l.key }}">Copy of {{ l.key }}</option>{% endfor %}</select>
+      <button class="btn primary" type="submit">Create layout</button>
+    </form>
+  </details>
+</section>
+
+<section class="block" id="keys" aria-labelledby="s-keys">
+  <h2 id="s-keys">API keys for camera agents</h2>
+  <p>An agent sends anonymous points to this store with a key. A key can only add points to this store's layouts. It cannot read anything.</p>
+  {% if new_key %}
+  <div class="newkey" role="alert">
+    <p><strong>Copy this key now.</strong> It is shown once and only a fingerprint is stored.</p>
+    <code id="newkey">{{ new_key }}</code>
+  </div>
+  {% endif %}
+  <ul class="rows">
+    {% for k in keys %}
+    <li>
+      <div class="row-main"><strong>{{ k.label }}</strong>
+        <span class="dim">{{ k.prefix }}... {% if k.revoked_at %}Revoked.{% elif k.last_used_at %}Last used {{ k.last_used_at[:10] }}.{% else %}Never used.{% endif %}</span></div>
+      {% if not k.revoked_at %}<div class="row-actions">
+        <form method="post" action="{{ url_for('key_revoke', ref=ref, key_id=k.id) }}"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="btn danger" type="submit">Revoke</button></form>
+      </div>{% endif %}
+    </li>
+    {% else %}<li class="dim">No keys yet.</li>{% endfor %}
+  </ul>
+  <form method="post" action="{{ url_for('key_create', ref=ref) }}" class="form inlineform">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label class="field-label" for="kl">Key name</label>
+    <input class="text" id="kl" name="label" placeholder="Front door camera">
+    <button class="btn primary" type="submit">Create key</button>
+  </form>
+  <h3>Sending data</h3>
+  <pre class="code">curl -X POST {{ host }}/api/ingest/v1/tracks \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"layout": "{{ layouts[0].key if layouts else 'A' }}", "recording": "Live",
+       "points": [{"track_id": 1, "t": 0.0, "x": 2.1, "y": 3.4}]}'</pre>
+  <p class="map-note">Each point has exactly four fields and a request holds up to 5,000 points. Anything else is rejected, never stored. Send t in seconds and x, y in metres from the bottom-left corner of the floor.</p>
+</section>
+
+<section class="block" aria-labelledby="s-del">
+  <h2 id="s-del">Delete this store</h2>
+  <form method="post" action="{{ url_for('settings_delete', ref=ref) }}" class="form inlineform">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label class="field-label" for="cf">Type the store name ({{ store.name }}) to confirm. This removes its layouts, recordings and keys.</label>
+    <input class="text" id="cf" name="confirm" autocomplete="off">
+    <button class="btn danger" type="submit">Delete store</button>
+  </form>
+</section>
+{% endblock %}

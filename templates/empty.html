@@ -1,0 +1,21 @@
+{% extends "base_app.html" %}
+{% block content %}
+<h1>{{ title }}</h1>
+{% if need_two %}
+<p class="lede">The experiment compares two layouts of the same store, and this store has {{ ready_layouts|length }} with data.</p>
+{% elif no_common %}
+<p class="lede">Layouts {{ pair[0].key }} and {{ pair[1].key }} have no merchandise zone with the same name. Use matching zone names in both layouts to compare a display that moved.</p>
+{% else %}
+<p class="lede">This store has no recording to analyse yet.</p>
+{% endif %}
+{% if can_edit %}
+<ol class="todo">
+  <li>Draw at least one merchandise zone in a layout{% if layout %} (<a href="{{ url_for('zone_editor', ref=ref, key=layout.key) }}">edit layout {{ layout.key }}</a>){% endif %}.</li>
+  <li>Send positions from a camera agent, or upload a CSV with track_id, t, x and y.</li>
+  <li>For the experiment, add a second layout and record data for it too.</li>
+</ol>
+<p><a class="btn primary" href="{{ url_for('settings', ref=ref) }}">Open settings</a></p>
+{% else %}
+<p class="empty">The demo store has no data. Run <code>python seed_demo.py</code> on the server.</p>
+{% endif %}
+{% endblock %}

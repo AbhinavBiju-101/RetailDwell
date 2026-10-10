@@ -1,0 +1,18 @@
+{% extends "base_app.html" %}
+{% block content %}
+<h1>Add a store</h1>
+<p class="lede">Zones and positions are measured in metres from the bottom-left corner of the floor, so enter the size of the area the cameras cover.</p>
+<form method="post" class="form" novalidate>
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <label class="field-label" for="name">Store name</label>
+  <input class="text" id="name" name="name" required autofocus>
+  <label class="field-label" for="kind">Store type</label>
+  <input class="text" id="kind" name="kind" placeholder="Grocery, pharmacy, apparel" value="Retail">
+  <div class="pair">
+    <div><label class="field-label" for="width_m">Width (m)</label><input class="text" id="width_m" name="width_m" type="number" step="0.5" min="3" max="200" required></div>
+    <div><label class="field-label" for="height_m">Depth (m)</label><input class="text" id="height_m" name="height_m" type="number" step="0.5" min="3" max="200" required></div>
+  </div>
+  <button class="btn primary" type="submit">Create store</button>
+  <a class="btn" href="{{ url_for('stores') }}">Cancel</a>
+</form>
+{% endblock %}

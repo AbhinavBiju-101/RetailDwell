@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="auth-page">
+  <aside class="auth-stage">
+    <i class="glow g1"></i><i class="glow g2"></i><i class="glow g3"></i>
+    <a class="brand" href="{{ url_for('landing') }}"><img src="{{ url_for('static', filename='favicon.svg') }}" alt="" width="40" height="40"><span class="bn">{{ brand }}<small>{{ tagline }}</small></span></a>
+    <div class="auth-pitch">
+      <h2>See where your shop floor really earns its keep.</h2>
+      <p>Heat maps, queue waits and layout experiments from the cameras you already own.</p>
+      <ul class="auth-points">
+        <li>Anonymous positions only. No video is stored.</li>
+        <li>Compares layouts by share of shoppers, not raw counts.</li>
+        <li>Flags in plain language, with something to try.</li>
+      </ul>
+    </div>
+  </aside>
+  <section class="auth-side">
+    <div class="auth-top">
+      <button class="btn" id="theme-toggle" type="button" aria-pressed="false">Dark theme</button>
+      <a class="btn" href="{{ url_for('landing') }}">Back to the tour</a>
+    </div>
+    <div class="auth-card">
+      {% include "_flash.html" %}
+      {% block card %}{% endblock %}
+    </div>
+  </section>
+</div>
+<script>
+document.addEventListener("click", function (e) {
+  var b = e.target.closest("[data-reveal]"); if (!b) return;
+  var i = document.getElementById(b.dataset.reveal), show = i.type === "password";
+  i.type = show ? "text" : "password"; b.textContent = show ? "Hide" : "Show"; b.setAttribute("aria-pressed", String(show));
+});
+</script>
+{% endblock %}

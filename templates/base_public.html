@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block body %}
+<header class="site-head">
+  <a class="brand" href="{{ url_for('landing') }}"><img src="{{ url_for('static', filename='favicon.svg') }}" alt="" width="34" height="34"><span class="bn">{{ brand }}<small>{{ tagline }}</small></span></a>
+  <nav aria-label="Account">
+    <button class="btn" id="theme-toggle" type="button" aria-pressed="false">Dark theme</button>
+    {% if user %}
+      <a class="btn primary" href="{{ url_for('stores') }}">Open your stores</a>
+    {% else %}
+      <a class="btn" href="{{ url_for('login') }}">Sign in</a>
+      <a class="btn primary" href="{{ url_for('signup') }}">Create account</a>
+    {% endif %}
+  </nav>
+</header>
+<main id="main" class="public">
+  {% include "_flash.html" %}
+  {% block content %}{% endblock %}
+</main>
+<footer class="site-foot">
+  <p>Anonymous positions only. No video is stored, no faces are recognised, and nobody is tracked as an individual.</p>
+</footer>
+{% endblock %}

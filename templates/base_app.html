@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block head %}<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8" defer></script>{% endblock %}
+{% block body %}
+<div class="shell">
+  <aside class="rail">
+    <a class="brand" href="{{ url_for('stores') }}"><img src="{{ url_for('static', filename='favicon.svg') }}" alt="" width="34" height="34"><span class="bn">{{ brand }}<small>{{ tagline }}</small></span></a>
+    {% if store %}
+    <div class="store-id">
+      <strong>{{ store.name }}</strong>
+      <span>{{ store.kind }}, {{ '%g'|format(store.width_m) }} by {{ '%g'|format(store.height_m) }} m</span>
+      <a href="{{ url_for('stores') }}">Switch store</a>
+    </div>
+    <nav aria-label="Pages">
+      {% for ep, label in nav %}
+        <a href="{{ url_for(ep, ref=ref, layout=(layout.key if layout and ep != 'experiment' else None)) }}"
+           {% if endpoint == ep %}aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+      {% if can_edit %}<a href="{{ url_for('settings', ref=ref) }}" {% if endpoint in ('settings', 'zone_editor') %}aria-current="page"{% endif %}>Settings</a>{% endif %}
+    </nav>
+    {% endif %}
+    <div class="rail-foot">
+      {% if store and layout and ready_layouts|length > 1 and endpoint in ('overview', 'zones', 'flags', 'journeys') %}
+      <div>
+        <span class="field-label" id="layout-label">Layout</span>
+        <div class="seg" role="group" aria-labelledby="layout-label">
+          {% for l in ready_layouts %}
+            <a href="{{ url_for(endpoint, ref=ref, layout=l.key) }}" title="{{ l.label }}" {% if l.key == layout.key %}aria-current="true"{% endif %}>{{ l.key }}</a>
+          {% endfor %}
+        </div>
+        <p class="layout-name">{{ layout.label }}</p>
+      </div>
+      {% endif %}
+      <button class="btn" id="theme-toggle" type="button" aria-pressed="false">Dark theme</button>
+      <div class="who">
+        <span>{{ (user.name or user.email) if can_edit else 'Demo account' }}</span>
+        <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="linkish" type="submit">Sign out</button></form>
+      </div>
+      <p class="privacy">Anonymous positions only. No video stored, no faces, no individual alerts.</p>
+    </div>
+  </aside>
+  <main id="main">
+    {% if not can_edit %}<p class="banner">Demo account. Everything here is simulated and read-only.</p>{% endif %}
+    {% include "_flash.html" %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+{% endblock %}

@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Generated data (recreate with `python simulate.py`)
+data/
+
+# Privacy: never commit footage or raw video. Only anonymous tracks are kept.
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.jpg
+*.jpeg
+*.png
+calib.json
+
+# Model weights
+*.pt
+*.onnx
+
+# Streamlit / editors / OS
+.streamlit/secrets.toml
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
