@@ -189,6 +189,10 @@ class LocalRepo(Repo):
         for d in self._all("select * from datasets where layout_id = ?", (layout_id,)):
             if d["storage_path"] and os.path.exists(d["storage_path"]):
                 os.remove(d["storage_path"])
+            for lay in self._all("select store_id from layouts where id = ?", (layout_id,)):
+                sales = self._path("pos", lay["store_id"], f"{d['id']}.csv.gz")
+                if os.path.exists(sales):
+                    os.remove(sales)
             self._run("delete from ingest_points where dataset_id = ?", (d["id"],))
         self._run("delete from datasets where layout_id = ?", (layout_id,))
         self._run("delete from layouts where id = ?", (layout_id,))
@@ -270,6 +274,18 @@ class LocalRepo(Repo):
                   (path, int(len(df)), int(df.track_id.nunique()), _now(), dataset["id"]))
         return self._one("select * from datasets where id = ?", (dataset["id"],))
 
+    def save_pos(self, dataset, store, df):
+        path = self._path("pos", store["id"], f"{dataset['id']}.csv.gz")
+        df[["txn_id", "t", "zone", "amount"]].to_csv(path, index=False)
+        self._run("update datasets set updated_at = ? where id = ?", (_now(), dataset["id"]))
+        return len(df)
+
+    def load_pos(self, dataset, store):
+        path = self._path("pos", store["id"], f"{dataset['id']}.csv.gz")
+        if not os.path.exists(path):
+            return pd.DataFrame(columns=["txn_id", "t", "zone", "amount"])
+        return pd.read_csv(path, dtype={"txn_id": str})
+
     def append_points(self, dataset, df):
         rows = [(dataset["id"], int(a), float(b), float(c), float(d)) for a, b, c, d in df[["track_id", "t", "x", "y"]].itertuples(index=False)]
         with self.lock:
@@ -298,7 +314,7 @@ class LocalRepo(Repo):
     def has_demo_stores(self):
         return bool(self._one("select id from stores where is_demo = 1"))
 
-    def seed_demo_store(self, slug, spec, frames):
+    def seed_demo_store(self, slug, spec, frames, sales=None):
         s = self._one("select * from stores where slug = ?", (slug,))
         if not s:
             sid = str(uuid.uuid4())
@@ -319,4 +335,6 @@ class LocalRepo(Repo):
                           (lid, s["id"], key, lay["label"], json.dumps(zones), _now()))
             ds = self.svc_get_or_create_dataset(lid, "Simulated day", "simulated")
             self.save_tracks(ds, s, frames[key])
+            if sales and key in sales:
+                self.save_pos(ds, s, sales[key])
         return s

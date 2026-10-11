@@ -137,7 +137,28 @@ def cmd_selftest(a):
         st = synth.evaluate_stops(gt, est)
         print(f"Stops (within 1 m for 5 s): truth {st['true_stops']}, agent {st['agent_stops']}, "
               f"{st['found']} of the true stops found; stopped time truth {st['true_stop_s']:.0f}s, agent {st['agent_stop_s']:.0f}s.")
+        from . import evaluate as ev
+        print(ev.format_report(ev.evaluate_tracks(gt, est, zones=synth.ZONES)))
         print("This measures our geometry and tracking on drawn people. It says nothing about real footage.")
+
+
+def cmd_evaluate(a):
+    from . import evaluate as ev
+    try:
+        if a.truth_format == "mmptrack":
+            gt = ev.load_mmptrack_truth(a.truth, a.voxel_m, (a.origin_x, a.origin_y), a.truth_fps)
+        else:
+            gt = ev.load_tracks(a.truth)
+        est = ev.load_tracks(a.est)
+        zones = ev.load_zones(a.zones) if a.zones else None
+        r = ev.evaluate_tracks(gt, est, zones=zones, hz=a.hz, gate_m=a.gate_m, time_offset_s=a.time_offset)
+    except ev.EvalError as e:
+        raise SystemExit(f"Evaluation problem: {e}")
+    print(ev.format_report(r))
+    if a.json:
+        with open(a.json, "w") as f:
+            json.dump(r, f, indent=2, default=float)
+        print(f"Wrote {a.json}")
 
 
 def main(argv=None):
@@ -168,6 +189,19 @@ def main(argv=None):
     s.add_argument("--fps", type=float, default=8.0, help="detection rate"); s.add_argument("--min-track-s", type=float, default=2.0)
     s.add_argument("--max-seconds", type=float); s.add_argument("--preview", action="store_true")
     s.set_defaults(fn=cmd_run)
+
+    s = sub.add_parser("evaluate", help="score agent output against ground-truth floor tracks")
+    s.add_argument("--truth", required=True, help="ground truth: CSV (track_id,t,x,y in metres) or an MMPTRACK folder")
+    s.add_argument("--truth-format", choices=["csv", "mmptrack"], default="csv")
+    s.add_argument("--est", required=True, help="agent output CSV (track_id,t,x,y)")
+    s.add_argument("--zones", help='JSON {"name": [x0, y0, x1, y1, "merchandise"]} for the zone-level scores')
+    s.add_argument("--hz", type=float, default=2.0, help="resampling rate; the app assumes 2")
+    s.add_argument("--gate-m", type=float, default=1.0, help="largest position error that still counts as a match")
+    s.add_argument("--time-offset", type=float, default=0.0, help="seconds added to the agent's times to line the clocks up")
+    s.add_argument("--voxel-m", type=float, help="mmptrack: metres per grid cell, from the dataset's calibration")
+    s.add_argument("--origin-x", type=float, default=0.0); s.add_argument("--origin-y", type=float, default=0.0)
+    s.add_argument("--truth-fps", type=float, default=15.0, help="mmptrack frame rate")
+    s.add_argument("--json", help="also write the scores to this file"); s.set_defaults(fn=cmd_evaluate)
 
     s = sub.add_parser("selftest"); s.add_argument("--seconds", type=int, default=120)
     s.add_argument("--people", type=int, default=14); s.add_argument("--seed", type=int, default=7)

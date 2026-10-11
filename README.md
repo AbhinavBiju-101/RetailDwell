@@ -62,6 +62,14 @@ Exactly four fields per point, up to 5,000 points per request, x and y in metres
 floor, t in seconds. Extra fields are rejected. CSV upload in settings takes the same four columns.
 The camera agent (`python -m agent`, below) produces these points from footage and sends them for you.
 
+## Sending sales data (optional)
+
+Sales turn the dwell data into revenue per shopper and a buy rate for every zone. A sale is tied to the shopper who finished standing at the register nearest its time; nothing about the person is used. The layout needs a zone of type `checkout`.
+
+- Upload: Settings, Sales. CSV with exactly `txn_id, t, zone, amount` (one row per section of a basket; `t` in seconds since the recording started). Other columns are dropped.
+- From the till: `POST /api/ingest/v1/sales` with a store API key and `{"layout": "A", "recording": "Live", "sales": [...]}`. Repeating a line is safe.
+- The demo stores include simulated sales. Run `python seed_demo.py` again to add them to an existing demo.
+
 ## Camera agent
 
 Turns a video file, camera or RTSP stream into the four-field points above. Frames stay in memory for one
@@ -81,7 +89,10 @@ export DWELL_API_KEY=dtm_...                                                    
 python -m agent run --source rtsp://cam/stream --calib calib.json --layout A \
        --api https://your-app.onrender.com --recording "Live"                                # live, to the app
 
-# 3. Check the code itself (no camera or model needed)
+# 3. Score output against ground-truth floor tracks (CSV track_id,t,x,y in metres)
+python -m agent evaluate --truth truth.csv --est tracks.csv --zones zones.json
+
+# 4. Check the code itself (no camera or model needed)
 python -m agent selftest        # synthetic store: prints measured position error and stops found
 python -m tests.test_agent      # 19 tests, including video -> ingest API -> analysis
 ```

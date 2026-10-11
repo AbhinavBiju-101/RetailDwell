@@ -21,7 +21,7 @@
     {% endif %}
     <div class="rail-foot">
       <a class="back-link" href="{{ url_for('landing') }}">&larr; Back to main page</a>
-      {% if store and layout and ready_layouts|length > 1 and endpoint in ('overview', 'zones', 'flags', 'journeys') %}
+      {% if store and layout and ready_layouts|length > 1 and endpoint in ('overview', 'zones', 'revenue', 'flags', 'journeys') %}
       <div>
         <span class="field-label" id="layout-label">Layout</span>
         <div class="seg" role="group" aria-labelledby="layout-label">

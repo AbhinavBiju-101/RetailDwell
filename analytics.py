@@ -26,22 +26,26 @@ def assign_zone(df, zones):
 
 
 # ---------- dwell by displacement ----------
-def stop_episodes(g):
+def _stop_spans(g):
     """Stays within DWELL_RADIUS_M of an anchor for >= DWELL_MIN_S.
-    Returns list of (anchor_x, anchor_y, duration_s)."""
+    Returns list of (anchor_x, anchor_y, t_first, t_last) in seconds."""
     xs, ys, ts = g["x"].to_numpy(), g["y"].to_numpy(), g["t"].to_numpy()
-    eps, i, n = [], 0, len(xs)
+    spans, i, n = [], 0, len(xs)
     while i < n:
         j = i
         while j + 1 < n and math.hypot(xs[j + 1] - xs[i], ys[j + 1] - ys[i]) <= DWELL_RADIUS_M:
             j += 1
-        dur = ts[j] - ts[i] + DT
-        if dur >= DWELL_MIN_S:
-            eps.append((xs[i:j + 1].mean(), ys[i:j + 1].mean(), dur))
+        if ts[j] - ts[i] + DT >= DWELL_MIN_S:
+            spans.append((xs[i:j + 1].mean(), ys[i:j + 1].mean(), ts[i], ts[j]))
             i = j + 1
         else:
             i += 1
-    return eps
+    return spans
+
+
+def stop_episodes(g):
+    """Stops as (anchor_x, anchor_y, duration_s)."""
+    return [(ax, ay, t1 - t0 + DT) for ax, ay, t0, t1 in _stop_spans(g)]
 
 
 def build_events(df, zones):

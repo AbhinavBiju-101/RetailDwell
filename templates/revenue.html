@@ -1,0 +1,133 @@
+{% extends "base_app.html" %}
+{% block content %}
+<h1>Revenue per shopper</h1>
+{% if pos_error %}
+<p class="lede">The sales data for {{ layout.label }} could not be read. Reload the page. If it keeps failing, upload the file again.</p>
+{% elif not P %}
+<p class="lede">{{ layout.label }} has no sales data yet. With it, each sale is tied to the shopper who paid at that moment, so the floor can be coloured by what shoppers spend, not only by how many walk past.</p>
+{% if can_edit %}
+<ol class="todo">
+  <li>Export sales from the till as a CSV with four columns: <code>txn_id</code>, <code>t</code> (seconds since the recording started), <code>zone</code> (the section the item belongs to) and <code>amount</code>.</li>
+  <li>Upload it in <a href="{{ url_for('settings', ref=ref) }}#sales">Settings, Sales</a>, or send it from the till with the sales API.</li>
+  <li>Make sure the layout has a zone of type checkout where people pay, so sales can be matched to the people standing there.</li>
+</ol>
+{% else %}<p class="empty">This demo layout has no sales data. Run <code>python seed_demo.py</code> on the server.</p>{% endif %}
+{% else %}
+{% set k = P.kpi %}{% set m = P.match %}
+<p class="lede">{{ layout.label }}: {{ m.n_txn }} sales worth {{ k.total_revenue|money }}. {{ m.n_usable }} of them ({{ '%.0f'|format(m.match_rate * 100) }}%) were tied to a shopper at the register, and the figures here cover those. A sale is matched by time and place only, never by who the person is.</p>
+
+{% if items %}
+<ul class="findings" style="margin-bottom: 1.75rem; max-width: 62ch">
+  {% for f in items %}<li class="finding {{ f.tone }}"><h3>{{ f.kind }}</h3><p>{{ f.text }}</p></li>{% endfor %}
+</ul>
+{% endif %}
+
+<dl class="figures">
+  <div class="figure"><dd>{{ k.revenue_per_shopper|money }}</dd><dt>Revenue per shopper</dt></div>
+  <div class="figure"><dd>{% if k.conversion is not none %}{{ '%.0f'|format(k.conversion * 100) }}<small>%</small>{% else %}n/a{% endif %}</dd><dt>Shoppers with a matched sale</dt></div>
+  <div class="figure"><dd>{{ k.avg_basket|money }}</dd><dt>Average basket</dt></div>
+  <div class="figure"><dd>{% if k.coverage is not none %}{{ '%.0f'|format(k.coverage * 100) }}<small>%</small>{% else %}n/a{% endif %}</dd><dt>Of revenue tied to a shopper</dt></div>
+</dl>
+<p class="map-note" style="margin: -1rem 0 1.75rem; max-width: 70ch">Shoppers are everyone except loiterers and waiters, and shoppers whose sale was ambiguous are left out of these averages ({{ k.n_unknown }} of {{ k.n_shoppers }}). Someone who paid but could not be matched counts as no sale, so the share with a matched sale is a floor, not an exact conversion rate.</p>
+
+{% include "_heatcontrols.html" %}
+<div class="split">
+  <section aria-labelledby="map-h">
+    <h2 id="map-h" class="sr-only">Map of spend per shopper</h2>
+    <div class="map-frame">
+      <div class="map" id="revmap" data-plot role="img" aria-label="Map of average spend of the shoppers who walked through each part of the floor, {{ layout.label }}"></div>
+      <div class="legend-bar"><span>Lower spend</span><span class="ramp" data-ramp></span><span>Higher average spend per shopper who passed</span></div>
+      <p class="map-note">Each square is the average spend of the shoppers who walked through it, counted before they joined the checkout queue. Blank squares had fewer than 8 shoppers. This is correlation: people who pass a place may spend more for other reasons.</p>
+    </div>
+  </section>
+  <div>
+    <section class="panel" aria-labelledby="seg-h">
+      <h2 id="seg-h">By visit type</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">Visit type</th><th scope="col">Visits</th><th scope="col">Bought</th><th scope="col">Basket</th><th scope="col">Per visit</th></tr></thead>
+          <tbody>
+            {% for r in P.missions %}
+            <tr><th scope="row">{{ r.mission|capitalize }}</th><td>{{ r.n }}</td>
+              <td>{% if r.conversion is not none %}{{ '%.0f'|format(r.conversion * 100) }}%{% else %}-{% endif %}</td>
+              <td>{{ r.avg_basket|money if r.avg_basket is not none else '-' }}</td>
+              <td>{{ r.revenue_per_visit|money if r.revenue_per_visit is not none else '-' }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="map-note">Averaging directed shoppers with explorers hides both. Wanderers who buy a drink on the way out are revenue too: {{ k.loiterer_buyers }} matched sale{{ '' if k.loiterer_buyers == 1 else 's' }} here came from visits labelled loiterer or waiter.</p>
+    </section>
+    <section class="panel" aria-labelledby="how-h">
+      <h2 id="how-h">How sales were matched</h2>
+      <p>Each sale goes to the shopper whose last stop at the register ended closest to the sale time, one sale per shopper, within {{ '%.0f'|format(m.tol_s) }} seconds.
+        {% if m.offset_found %}The sales clock ran {{ '%.0f'|format(m.offset_s|abs) }} s {{ 'ahead of' if m.offset_s > 0 else 'behind' }} the camera clock and was corrected for.{% else %}No gap between the sales clock and the camera clock was detected.{% endif %}</p>
+      <dl class="compare-line">
+        <dt>Clear matches</dt><dd>{{ m.n_clear }}</dd>
+        <dt>Probable</dt><dd>{{ m.n_probable }}</dd>
+        <dt>Ambiguous, left out</dt><dd>{{ m.n_ambiguous }}</dd>
+        <dt>Sales with no one at the till</dt><dd>{{ m.n_unmatched_txn }}</dd>
+        <dt>Till visits with no sale</dt><dd>{{ m.n_unmatched_services }}</dd>
+        <dt>Typical timing gap</dt><dd>{% if m.median_abs_residual_s is not none %}{{ '%.1f'|format(m.median_abs_residual_s) }} s{% else %}n/a{% endif %}</dd>
+      </dl>
+      <p class="map-note">Ambiguous means two shoppers finished paying at nearly the same moment, so the basket could belong to either. They are excluded rather than guessed.</p>
+    </section>
+  </div>
+</div>
+
+<section class="block" style="max-width: none" aria-labelledby="fun-h">
+  <h2 id="fun-h">Reach, stop and buy, zone by zone</h2>
+  <p>Two zones can sell the same and have very different funnels. Not reached is a route problem, reached but not stopped is a visibility problem, stopped but not bought is an offer problem.</p>
+  <div class="split">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Zone</th><th scope="col">Reached</th><th scope="col">Stopped</th><th scope="col">Bought here</th>
+          <th scope="col">Stoppers who buy</th><th scope="col">Revenue</th><th scope="col">Per shopper reached</th></tr></thead>
+        <tbody>
+          {% for r in P.zones %}
+          <tr><th scope="row">{{ r.zone }}</th>
+            <td>{{ r.reached }}</td><td>{{ r.stopped }}</td><td>{{ r.bought }}</td>
+            <td>{% if r.stop_to_buy is not none %}{{ '%.0f'|format(r.stop_to_buy * 100) }}%{% else %}-{% endif %}</td>
+            <td>{{ r.revenue|money }}</td>
+            <td>{{ r.revenue_per_reached|money if r.revenue_per_reached is not none else '-' }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="chart" id="funnel" data-plot style="height: 320px" role="img" aria-label="Share of shoppers who reached, stopped at and bought from each zone"></div>
+  </div>
+  <p class="map-note">Bought here means the shopper's basket holds an item from this zone. Reached, stopped and bought count shoppers, so they can be compared across zones.
+    {% if P.miss.rate is not none %}{{ P.miss.not_seen }} of {{ P.miss.lines }} items ({{ '%.0f'|format(P.miss.rate * 100) }}%) were bought by shoppers the tracker did not see in that zone, which is the data-quality check on zone edges and camera coverage.{% endif %}
+    {% if P.unmapped %}Sales for sections that are not zones in this layout ({{ P.unmapped|join(', ') }}) add {{ unmapped_revenue|money }} and are not shown above.{% endif %}
+    Buying after stopping is an association, not proof that the stop caused the sale.</p>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if P %}<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const C = {{ chart|tojson }};
+  let payload = null;
+  const el = document.getElementById("revmap");
+  App.onRender(async function () {
+    if (!payload) payload = await App.getJSON("{{ url_for('api_revenue_map', ref=ref, key=layout.key) }}");
+    const t = App.heatTrace(payload, { showscale: true });
+    t.z = t.z.map((row, i) => row.map((v, j) => (payload.z[i][j] === null ? null : v)));   // blank where too few shoppers
+    t.zsmooth = false; t.hoverongaps = false;
+    t.hovertemplate = payload.currency + "%{customdata:,.0f} average spend<br>x %{x:.1f} m, y %{y:.1f} m<extra></extra>";
+    t.colorbar.title = { text: "spend per shopper", side: "right" };
+    const zmax = Math.max(...payload.z.flat().filter((v) => v !== null), 1e-9), g = App.gamma();
+    t.colorbar.ticktext = [0, 0.25, 0.5, 0.75, 1].map((f) => payload.currency + Math.round(f * zmax).toLocaleString());
+    App.plot(el, [t], App.mapLayout(payload, { margin: { l: 44, r: 8, t: 6, b: 32 } }));
+    el.classList.add("ready");
+
+    const mk = (name, key, color) => ({ type: "bar", name: name, x: C.zones, y: C[key], marker: { color: color },
+      hovertemplate: "%{x}<br>" + name + ": %{y:.0f}% of shoppers<extra></extra>" });
+    App.plot("funnel", [mk("Reached", "reached", App.css("--seg-pass")), mk("Stopped", "stopped", App.css("--accent")), mk("Bought", "bought", App.css("--good"))],
+      App.baseLayout({ barmode: "group", margin: { l: 48, r: 8, t: 8, b: 70 }, legend: { orientation: "h", y: -0.28 },
+        xaxis: { tickangle: -25, fixedrange: true }, yaxis: { title: { text: "Share of shoppers", font: { size: 12 } }, ticksuffix: "%", rangemode: "tozero", gridcolor: App.css("--line"), fixedrange: true } }));
+  });
+});
+</script>{% endif %}
+{% endblock %}

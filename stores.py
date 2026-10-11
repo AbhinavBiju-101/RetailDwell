@@ -119,6 +119,28 @@ STORES = {
 
 ZONE_TYPES = ["merchandise", "checkout", "entrance", "seating"]
 
+# Mock sales, one config per demo store (prices in rupees). A shopper who stopped at a zone buys from it with
+# probability take[zone] (directed shoppers are pulled up towards 1; a (explorer, directed) pair sets both). `extra` items are bought regardless of
+# where the shopper went (here: prescriptions, which are not a floor zone). The POS clock runs skew_s ahead of
+# the camera clock, with noise_s of jitter, and a few sales (untracked) have no matching track at all.
+# The simulator sets all of this, so the numbers show the method recovers a known pattern, not real behaviour.
+DEFAULT_TAKE = 0.55
+BASKETS = {
+    "lakeside-grocery": dict(
+        price={"Produce": 120, "Snacks": 90, "Beverages": 110, "Household": 260, "Weekly offers": 150},
+        take={"Weekly offers": 0.8}, skew_s=4.0, noise_s=3.0),
+    "volt-electronics": dict(
+        price={"Phones": 18000, "Laptops": 42000, "TV wall": 38000, "Audio": 3500, "Accessories": 900},
+        take={"Phones": 0.45, "Laptops": (0.06, 0.12), "TV wall": (0.05, 0.10), "Audio": 0.4, "Accessories": 0.7}, skew_s=-6.0, noise_s=4.0),
+    "thread-and-co": dict(
+        price={"New arrivals": 2200, "Women": 1800, "Men": 1600, "Denim": 2400, "Fitting rooms": 1900},
+        take={"New arrivals": 0.3, "Women": 0.5, "Men": 0.45, "Denim": 0.5, "Fitting rooms": 0.8}, skew_s=2.0, noise_s=4.0),
+    "corner-pharmacy": dict(
+        price={"Everyday health": 180, "Wellness": 350, "Baby & care": 420},
+        take={"Everyday health": 0.6, "Wellness": 0.5, "Baby & care": 0.45},
+        extra={"Prescriptions": (0.55, 520)}, skew_s=0.0, noise_s=3.0),
+}
+
 
 def store_keys():
     return list(STORES)

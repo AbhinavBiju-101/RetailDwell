@@ -223,6 +223,22 @@ class SupabaseRepo(Repo):
                              dict(storage_path=path, n_points=int(len(df)), n_tracks=int(df.track_id.nunique()),
                                   updated_at=_now()))[0]
 
+    # Sales lines live in the private `tracks` bucket under pos/, so no schema change or new bucket is needed.
+    def _pos_path(self, dataset, store):
+        return f"pos/{store['id']}/{dataset['id']}.csv.gz"
+
+    def save_pos(self, dataset, store, df):
+        body = gzip.compress(df[["txn_id", "t", "zone", "amount"]].to_csv(index=False).encode())
+        self.c.upload("tracks", self._pos_path(dataset, store), body, "application/gzip")
+        self.c.update("datasets", self.svc, {"id": f"eq.{dataset['id']}"}, dict(updated_at=_now()))
+        return len(df)
+
+    def load_pos(self, dataset, store):
+        got = self.c.download("tracks", self._pos_path(dataset, store))
+        if got is None:
+            return pd.DataFrame(columns=["txn_id", "t", "zone", "amount"])
+        return pd.read_csv(io.BytesIO(got[0]), compression="gzip", dtype={"txn_id": str})
+
     def append_points(self, dataset, df):
         rows = [dict(dataset_id=dataset["id"], track_id=int(a), t=float(b), x=float(c), y=float(d))
                 for a, b, c, d in df[["track_id", "t", "x", "y"]].itertuples(index=False)]
@@ -245,7 +261,7 @@ class SupabaseRepo(Repo):
     def has_demo_stores(self):
         return bool(self.c.select("stores", self.svc, {"select": "id", "is_demo": "eq.true", "limit": "1"}))
 
-    def seed_demo_store(self, slug, spec, frames):
+    def seed_demo_store(self, slug, spec, frames, sales=None):
         fields = dict(name=spec["name"], kind=spec["kind"], blurb=spec["blurb"], width_m=spec["w"], height_m=spec["h"],
                       window_s=spec["window_s"], hero_zone=spec["hero"])
         rows = self.c.select("stores", self.svc, {"select": "*", "slug": f"eq.{slug}", "limit": "1"})
@@ -258,5 +274,7 @@ class SupabaseRepo(Repo):
             layout = self.c.insert("layouts", self.svc, [dict(store_id=store["id"], key=key, label=lay["label"], zones=zones)],
                                    upsert_on="store_id,key")[0]
             ds = self.svc_get_or_create_dataset(layout["id"], "Simulated day", "simulated")
-            self.save_tracks(ds, store, frames[key])
+            ds = self.save_tracks(ds, store, frames[key])
+            if sales and key in sales:
+                self.save_pos(ds, store, sales[key])
         return store

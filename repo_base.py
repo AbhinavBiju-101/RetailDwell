@@ -8,6 +8,10 @@ so access rules live in one place: the database policies in Supabase, mirrored i
 """
 import re
 
+import pandas as pd
+
+from config import POS_MAX_TXNS
+
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
@@ -77,8 +81,19 @@ class Repo:
     def svc_get_store(self, store_id): raise NotImplementedError
     def svc_layout_by_key(self, store_id, key): raise NotImplementedError
     def svc_get_or_create_dataset(self, layout_id, label, source): raise NotImplementedError
+    def save_pos(self, dataset, store, df): raise NotImplementedError            # sales lines: txn_id, t, zone, amount
+    def load_pos(self, dataset, store): raise NotImplementedError                # -> DataFrame (empty when none)
+
+    def append_pos(self, dataset, store, df):
+        """Add sales lines to a recording; a line with the same txn_id and zone replaces the earlier one."""
+        cur = self.load_pos(dataset, store)
+        out = pd.concat([cur, df], ignore_index=True).drop_duplicates(["txn_id", "zone"], keep="last")
+        if out["txn_id"].nunique() > POS_MAX_TXNS:
+            raise RepoError(f"A recording holds at most {POS_MAX_TXNS:,} sales. Start a new recording for the next period.")
+        return self.save_pos(dataset, store, out)
+
     def save_plan(self, store, data, content_type): raise NotImplementedError
     def get_plan(self, store): raise NotImplementedError                          # -> (bytes, content_type) | None
     def ensure_user(self, email, password, name, role): raise NotImplementedError
-    def seed_demo_store(self, slug, spec, frames): raise NotImplementedError
+    def seed_demo_store(self, slug, spec, frames, sales=None): raise NotImplementedError
     def has_demo_stores(self): raise NotImplementedError

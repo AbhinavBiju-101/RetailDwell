@@ -115,6 +115,27 @@
   <p class="map-note">Each point has exactly four fields and a request holds up to 5,000 points. Anything else is rejected, never stored. Send t in seconds and x, y in metres from the bottom-left corner of the floor.</p>
 </section>
 
+<section class="block" id="sales" aria-labelledby="s-sales">
+  <h2 id="s-sales">Sales (POS)</h2>
+  <p>Upload sales for a recording and each sale is tied to the shopper who paid at that moment, which gives revenue per shopper and a buy rate for every zone. The match uses time and place at the register only. A layout needs a zone of type checkout and at least one recording.</p>
+  <form method="post" action="" class="form" id="sales-form" enctype="multipart/form-data" onsubmit="this.action = '{{ url_for('upload_sales', ref=ref, key='KEY') }}'.replace('KEY', this.layout.value)">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label class="field-label" for="sl">Layout</label>
+    <select id="sl" name="layout">{% for l in layouts %}<option value="{{ l.key }}">{{ l.key }}: {{ l.label }}</option>{% endfor %}</select>
+    <label class="field-label" for="sf">Sales CSV</label>
+    <input class="text" id="sf" type="file" name="file" accept=".csv,.gz,text/csv" required>
+    <button class="btn primary" type="submit">Upload sales</button>
+  </form>
+  <p class="map-note">Exactly four columns are read: <code>txn_id</code>, <code>t</code> (seconds since the recording started, the same clock as the tracks), <code>zone</code> (the section the items belong to) and <code>amount</code>, one row per section of a basket. Card, loyalty, cashier and customer columns are dropped, and uploading again replaces the earlier file. Till and camera clocks may differ by up to two minutes: the gap is found automatically.</p>
+  <h3>Sending sales from the till</h3>
+  <pre class="code">curl -X POST {{ host }}/api/ingest/v1/sales \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"layout": "{{ layouts[0].key if layouts else 'A' }}", "recording": "Live",
+       "sales": [{"txn_id": "T1001", "t": 912.4, "zone": "Produce", "amount": 240.0}]}'</pre>
+  <p class="map-note">Each line has exactly four fields, up to 1,000 lines per request and 5,000 sales per recording. A line with the same txn_id and zone replaces the earlier one, so a retry is safe. Use the same recording name as the camera agent.</p>
+</section>
+
 <section class="block" aria-labelledby="s-del">
   <h2 id="s-del">Delete this store</h2>
   <form method="post" action="{{ url_for('settings_delete', ref=ref) }}" class="form inlineform">

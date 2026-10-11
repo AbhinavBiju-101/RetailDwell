@@ -26,9 +26,12 @@ def seed(repo, only=None, log=print):
         if only and slug != only:
             continue
         log(f"Simulating {spec['name']} ...")
-        frames = {k: df[["track_id", "t", "x", "y"]] for k, (df, _pos) in simulate.generate(slug).items()}
-        repo.seed_demo_store(slug, spec, frames)
-        log(f"  stored {sum(len(f) for f in frames.values()):,} points in {len(frames)} layouts")
+        gen = simulate.generate_with_sales(slug)
+        frames = {k: df[["track_id", "t", "x", "y"]] for k, (df, _lines, _truth) in gen.items()}
+        sales = {k: lines for k, (_df, lines, _truth) in gen.items()}
+        repo.seed_demo_store(slug, spec, frames, sales)
+        log(f"  stored {sum(len(f) for f in frames.values()):,} points and "
+            f"{sum(l.txn_id.nunique() for l in sales.values()):,} mock sales in {len(frames)} layouts")
 
 
 def ensure_demo_user(repo, log=print):

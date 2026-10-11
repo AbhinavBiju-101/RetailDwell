@@ -28,6 +28,7 @@ from flask import (Flask, abort, flash, g, jsonify, make_response, redirect, ren
 load_dotenv()
 
 import analytics as an  # noqa: E402
+import pos as sales  # noqa: E402
 import validation as val  # noqa: E402
 from repo import get_repo  # noqa: E402
 from repo_base import AuthError, Forbidden, NotFound, RepoError, store_ref  # noqa: E402
@@ -40,11 +41,13 @@ log = logging.getLogger("dwell")
 LOITERER = an.LOITERER
 SEGMENTS = ["directed", "exploratory", LOITERER, "pass-through"]
 NAV = [("overview", "Overview"), ("experiment", "Experiment"), ("zones", "Zones"),
-       ("flags", "Flags"), ("journeys", "Journeys")]
+       ("revenue", "Revenue"), ("flags", "Flags"), ("journeys", "Journeys")]
+CURRENCY = os.environ.get("CURRENCY_SYMBOL", "\u20b9")
 TONE = {"Bottleneck": "bad", "Dead zone": "bad", "Visibility problem": "warn",
         "Quieter than usual": "warn", "Busier than usual": "info",
         "Pass-through": "info", "Destination": "info", "Hot zone": "good",
-        "Healthy": "good", "OK": "good"}
+        "Healthy": "good", "OK": "good",
+        "Offer problem": "warn", "Hidden earner": "info", "Data check": "warn"}
 TONE_RANK = {"bad": 0, "warn": 1, "info": 2, "good": 3}
 PLAN_TYPES = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"))
 MAX_PLAN_BYTES = 5 * 1024 * 1024
@@ -84,6 +87,10 @@ def timing_view(tb):
                                       for w in tb["windows"]], rows=rows)
 
 
+def money(v, digits=0):
+    return "n/a" if v is None or v != v else f"{CURRENCY}{v:,.{digits}f}"
+
+
 def records(df):
     return json.loads(df.to_json(orient="records"))
 
@@ -107,6 +114,8 @@ def findings(R):
     chk = an.flag_checkout(R["checkout"])
     if chk:
         out.append(dict(kind=chk["kind"], tone=TONE[chk["kind"]], text=chk["message"]))
+    out += [dict(kind=f["kind"], tone=TONE.get(f["kind"], "info"), text=f["text"])
+            for f in (R.get("pos") or {}).get("items", [])]
     out.sort(key=lambda f: TONE_RANK[f["tone"]])
     return out
 
@@ -134,6 +143,11 @@ class Cache:
                     self.data.popitem(last=False)
                 self.locks.pop(key, None)
             return value
+
+
+    def drop(self, key):
+        with self.lock:
+            self.data.pop(key, None)
 
 
 class Throttle:
@@ -173,6 +187,8 @@ def create_app(repo=None):
     app.config["REPO"] = repo
     analyses, comparisons = Cache(24), Cache(256)
     login_throttle = Throttle(10, 600)
+    pos_lock = threading.Lock()
+    app.jinja_env.filters["money"] = money
     demo_email = os.environ.get("DEMO_EMAIL", "").strip()
     demo_password = os.environ.get("DEMO_PASSWORD", "")
 
@@ -318,10 +334,22 @@ def create_app(repo=None):
         zones = layout["zones"]
         window = int(store.get("window_s") or 300)
         zkey = hash(json.dumps(zones, sort_keys=True))
-        key = (ds["id"], ds["n_points"], zkey, store["width_m"], store["height_m"], window)
-        return analyses.get(key, lambda: an.analyse_layout(
-            repo.load_tracks(ds, store), {n: list(z) for n, z in zones.items()},
-            float(store["width_m"]), float(store["height_m"]), window)), key
+        key = (ds["id"], ds["n_points"], ds.get("updated_at"), zkey, store["width_m"], store["height_m"], window)
+
+        def build():
+            R = an.analyse_layout(repo.load_tracks(ds, store), {n: list(z) for n, z in zones.items()},
+                                  float(store["width_m"]), float(store["height_m"]), window)
+            R["pos"], R["pos_error"] = None, False
+            try:                                  # sales are optional: a failure here must not break the other pages
+                R["pos"] = sales.analyse_pos(R, repo.load_pos(ds, store))
+            except Exception:
+                log.exception("Sales data could not be read for dataset %s", ds["id"])
+                R["pos_error"] = True
+            return R
+        R = analyses.get(key, build)
+        if R.get("pos_error"):
+            analyses.drop(key)                    # try again next time rather than hiding the sales for good
+        return R, key
 
     def pick_layout(store, layouts, key):
         """The layout named by ?layout=, else the first one with data."""
@@ -451,7 +479,8 @@ def create_app(repo=None):
             peak_wait=float(chk["est_wait_min"]) if chk else None,
             median_wait=ws["median"] if ws else None,
             busiest=merch.loc[merch.visit_share.idxmax()].zone, busiest_share=float(merch.visit_share.max()),
-            quietest=merch.loc[merch.visit_share.idxmin()].zone, quietest_share=float(merch.visit_share.min()))
+            quietest=merch.loc[merch.visit_share.idxmin()].zone, quietest_share=float(merch.visit_share.min()),
+            rev=(R["pos"]["kpi"]["revenue_per_shopper"] if R.get("pos") else None))
         segs = [dict(name=s, n=int(mix.get(s, 0)), pct=float(mix.get(s, 0) / max(len(lab), 1))) for s in SEGMENTS]
         return page("overview.html", store, layouts, layout, title="Overview", active="overview",
                     kpi=kpi, segs=segs, items=findings(R))
@@ -492,13 +521,16 @@ def create_app(repo=None):
             if c["ci_high"] < 0:
                 return ("down", "The change likely reduced it.")
             return ("flat", "No clear effect. The range includes zero.")
+        rev_all = comparisons.get((ka, kb, "rev"), lambda: sales.compare_revenue(Ra, Rb, None))
+        rev_zone = comparisons.get((ka, kb, zone, "rev"), lambda: sales.compare_revenue(Ra, Rb, zone))
         sa = Ra["stats"][Ra["stats"].zone == zone].iloc[0]
         sb = Rb["stats"][Rb["stats"].zone == zone].iloc[0]
         return page("experiment.html", store, layouts, None, title="Experiment", active="experiment",
                     la=la, lb=lb, zone=zone, zones=common, stop=stop, reach=reach,
                     vstop=verdict(stop), vreach=verdict(reach), moved=moved, sa=sa, sb=sb,
                     shoppers_a=int(Ra["stats"].attrs["n_shoppers"]), shoppers_b=int(Rb["stats"].attrs["n_shoppers"]),
-                    wait_a=wa, wait_b=wb, show_switch=False,
+                    wait_a=wa, wait_b=wb, show_switch=False, rev_all=rev_all, rev_zone=rev_zone,
+                    vrev=verdict(rev_all) if rev_all else None, vrevz=verdict(rev_zone) if rev_zone else None,
                     chart=clean_json(dict(
                         stop=dict(lift=stop["lift"], lo=stop["ci_low"], hi=stop["ci_high"]),
                         reach=dict(lift=reach["lift"], lo=reach["ci_low"], hi=reach["ci_high"]),
@@ -515,6 +547,27 @@ def create_app(repo=None):
         return page("zones.html", store, layouts, layout, title="Zones", active="zones",
                     rows=records(R["stats"]), n_shoppers=int(R["stats"].attrs["n_shoppers"]),
                     timing=timing_view(R["timing"]))
+
+    @app.get("/app/s/<ref>/revenue")
+    @login_required
+    def revenue(ref):
+        store, layouts = load_ctx(ref)
+        layout = pick_layout(store, layouts, request.args.get("layout"))
+        if not layout or not layout["ready"]:
+            return page("empty.html", store, layouts, layout, title="Revenue", active="revenue")
+        R, _ = analyse(store, layout)
+        P = R.get("pos")
+        chart = None
+        if P:
+            z = [r for r in P["zones"]]
+            chart = clean_json(dict(zones=[r["zone"] for r in z],
+                                    reached=[round(r["share_reached"] * 100, 1) for r in z],
+                                    stopped=[round(r["share_stopped"] * 100, 1) for r in z],
+                                    bought=[round(r["share_bought"] * 100, 1) for r in z]))
+        items = [dict(kind=f["kind"], tone=TONE.get(f["kind"], "info"), text=f["text"]) for f in P["items"]] if P else []
+        return page("revenue.html", store, layouts, layout, title="Revenue", active="revenue", P=P, items=items,
+                    pos_error=bool(R.get("pos_error")), chart=chart,
+                    unmapped_revenue=(float(P["lines"][P["lines"].zone.isin(P["unmapped"])].amount.sum()) if P else 0.0))
 
     @app.get("/app/s/<ref>/flags")
     @login_required
@@ -572,6 +625,20 @@ def create_app(repo=None):
             z=np.round(H, 3).tolist(), x=np.round((xe[:-1] + xe[1:]) / 2, 2).tolist(),
             y=np.round((ye[:-1] + ye[1:]) / 2, 2).tolist(),
             unit="seconds per visit" if per_visit else "person-seconds", n_visits=n,
+            zones=zone_geo(layout["zones"]), store=dict(w=w, h=h))))
+
+    @app.get("/api/s/<ref>/revenue-map/<key>")
+    @login_required
+    def api_revenue_map(ref, key):
+        store, layout, R = api_layout(ref, key)
+        P = R.get("pos")
+        if not P:
+            abort(404)
+        w, h = float(store["width_m"]), float(store["height_m"])
+        Z, xs, ys = sales.revenue_map(R, P, w, h)
+        return jsonify(clean_json(dict(
+            z=np.round(Z, 1).tolist(), x=np.round(xs, 2).tolist(), y=np.round(ys, 2).tolist(),
+            unit="spend per shopper", currency=CURRENCY, average=P["kpi"]["revenue_per_shopper"],
             zones=zone_geo(layout["zones"]), store=dict(w=w, h=h))))
 
     @app.get("/api/s/<ref>/zones/<key>")
@@ -751,6 +818,26 @@ def create_app(repo=None):
         flash(f"Recording saved: {len(df):,} points from {df.track_id.nunique():,} people. Only track_id, t, x and y were kept.", "good")
         return redirect(url_for("overview", ref=ref, layout=key))
 
+    @app.post("/app/s/<ref>/layouts/<key>/sales")
+    @login_required
+    @writer_required
+    def upload_sales(ref, key):
+        store, layouts = load_ctx(ref, need_edit=True)
+        layout = layout_by_key(layouts, key)
+        if not layout:
+            abort(404)
+        ds = layout["dataset"]
+        if not ds or not ds["n_points"]:
+            raise val.ValidationError(f"Add a recording for layout {key} first. Sales are matched to the people in it.")
+        f = request.files.get("file")
+        data = f.read(val.MAX_UPLOAD_BYTES + 1) if f else b""
+        if not data:
+            raise val.ValidationError("Choose a CSV file first.")
+        df = val.pos_from_csv(data)
+        repo.save_pos(ds, store, df)
+        flash(f"Sales saved: {df.txn_id.nunique():,} sales from {len(df):,} lines. Only txn_id, t, zone and amount were kept.", "good")
+        return redirect(url_for("revenue", ref=ref, layout=key))
+
     @app.post("/app/s/<ref>/keys/create")
     @login_required
     @writer_required
@@ -796,6 +883,34 @@ def create_app(repo=None):
             return jsonify(error=f"This store has no layout {key}. Create it in the app first."), 404
         ds = repo.svc_get_or_create_dataset(layout["id"], recording, "ingest")
         repo.append_points(ds, df)
+        return jsonify(accepted=int(len(df)), layout=key, recording=recording), 202
+
+    @app.post("/api/ingest/v1/sales")
+    def ingest_sales():
+        auth = request.headers.get("Authorization", "")
+        if not auth.lower().startswith("bearer "):
+            return jsonify(error="Send the store API key as 'Authorization: Bearer dtm_...'."), 401
+        found = repo.resolve_api_key(auth[7:].strip())
+        if not found:
+            return jsonify(error="That API key is not valid or has been revoked."), 401
+        store = repo.svc_get_store(found["store_id"])
+        if not store or store.get("is_demo"):
+            return jsonify(error="That key cannot receive data."), 403
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify(error="Send a JSON body: {layout, recording, sales}."), 400
+        try:
+            key = val.clean_layout_key(body.get("layout"))
+            recording = val.clean_text(str(body.get("recording") or "Live"), "recording", 60)
+            df = val.pos_from_json(body.get("sales"))
+        except val.ValidationError as e:
+            return jsonify(error=str(e)), 400
+        layout = repo.svc_layout_by_key(store["id"], key)
+        if not layout:
+            return jsonify(error=f"This store has no layout {key}. Create it in the app first."), 404
+        ds = repo.svc_get_or_create_dataset(layout["id"], recording, "ingest")
+        with pos_lock:                            # read-merge-write: one writer at a time in this process
+            repo.append_pos(ds, store, df)
         return jsonify(accepted=int(len(df)), layout=key, recording=recording), 202
 
     def warm():

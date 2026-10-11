@@ -62,6 +62,21 @@
         <dt>Time stopped there</dt><dd>{{ '%.0f'|format(sa.engaged_dwell_s) }} s before, {{ '%.0f'|format(sb.engaged_dwell_s) }} s after</dd>
       </dl>
     </section>
+    {% if rev_all %}
+    <section class="panel" aria-labelledby="rev-h">
+      <h2 id="rev-h">Revenue per shopper</h2>
+      {% if rev_all.lift == rev_all.lift %}<p class="lift {{ vrev[0] }}">{{ '%+.0f'|format(rev_all.lift * 100) }}%</p>{% else %}<p class="lift">n/a</p>{% endif %}
+      <p><strong>{{ vrev[1] }}</strong>
+        {% if rev_all.ci_low == rev_all.ci_low %}Likely range {{ '%+.0f'|format(rev_all.ci_low * 100) }}% to {{ '%+.0f'|format(rev_all.ci_high * 100) }}%.{% endif %}</p>
+      <dl class="compare-line">
+        <dt>Whole store</dt><dd>{{ rev_all.per_a|money }} before, {{ rev_all.per_b|money }} after</dd>
+        {% if rev_zone %}<dt>From {{ zone }}</dt><dd>{{ rev_zone.per_a|money(1) }} before, {{ rev_zone.per_b|money(1) }} after per shopper{% if rev_zone.lift == rev_zone.lift %} ({{ '%+.0f'|format(rev_zone.lift * 100) }}%{% if rev_zone.ci_low == rev_zone.ci_low %}, range {{ '%+.0f'|format(rev_zone.ci_low * 100) }}% to {{ '%+.0f'|format(rev_zone.ci_high * 100) }}%{% endif %}){% endif %}</dd>{% endif %}
+        <dt>Sales matched</dt><dd>{{ '%.0f'|format(rev_all.match_a * 100) }}% before, {{ '%.0f'|format(rev_all.match_b * 100) }}% after</dd>
+      </dl>
+      {% if (rev_all.match_a - rev_all.match_b)|abs > 0.1 %}<p class="map-note">The share of sales that could be matched differs by more than 10 points between the two days, which can move this figure by itself. Check the Revenue page for each layout.</p>{% endif %}
+      <p class="map-note">Spend is per shopper, so a busier day does not look like a better layout. Shoppers with no matched sale count as zero.</p>
+    </section>
+    {% endif %}
     <section class="panel">
       <h2>How to read this</h2>
       <p>A stop is staying within 1 m for at least 5 seconds. Stopping is the headline because a display that moves onto a main path is walked past more, which would flatter a count of people who merely came near it.</p>

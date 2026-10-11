@@ -21,6 +21,12 @@ def camera():
         frame_size=FRAME, floor_size=(FLOOR_W, FLOOR_H))
 
 
+# Zones around the five places people stop, so zone-level scores can be tried on the synthetic scene.
+ZONES = {"Shelf A": [1.8, 4.3, 4.2, 6.7, "merchandise"], "Shelf B": [4.8, 5.3, 7.2, 7.7, "merchandise"],
+         "Shelf C": [7.8, 4.3, 10.2, 6.7, "merchandise"], "Display D": [2.8, 1.8, 5.2, 4.2, "merchandise"],
+         "Display E": [7.3, 1.8, 9.7, 4.2, "merchandise"]}
+
+
 def _people(rng, n, seconds, lead_in=3.0):
     stops = [(3, 5.5), (6, 6.5), (9, 5.5), (4, 3), (8.5, 3)]
     people = []
@@ -84,6 +90,18 @@ def render(path, seconds=120, fps=8, n_people=14, seed=7):
         vw.write(np.clip(frame + noise, 0, 255).astype(np.uint8))
     vw.release()
     return floor, pd.DataFrame(gt, columns=["track_id", "t", "x", "y"])
+
+
+def truth_only(seconds=120, fps=8, n_people=14, seed=7):
+    """Ground-truth tracks of the same kind of scene as render(), without drawing any video (for fast tests)."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for pid, way, _c in _people(rng, n_people, seconds):
+        for i in range(int(seconds * fps)):
+            p = _at(way, i / fps)
+            if p is not None:
+                rows.append((pid, round(i / fps, 3), float(p[0]), float(p[1])))
+    return pd.DataFrame(rows, columns=["track_id", "t", "x", "y"])
 
 
 def evaluate(gt, est, fps=8, gate_m=1.0, bin_s=0.5):

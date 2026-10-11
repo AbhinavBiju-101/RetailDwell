@@ -8,6 +8,7 @@
   <div class="figure"><dd>{{ kpi.visits }}</dd><dt>Visits</dt></div>
   <div class="figure"><dd>{{ '%.1f'|format(kpi.avg_visit_min) }} <small>min</small></dd><dt>Average visit</dt></div>
   <div class="figure"><dd>{{ '%.0f'|format(kpi.loiterer_pct * 100) }}<small>%</small></dd><dt>Loiterers and waiters</dt></div>
+  {% if kpi.rev is not none %}<div class="figure"><dd><a href="{{ url_for('revenue', ref=ref, layout=layout.key) }}">{{ kpi.rev|money }}</a></dd><dt>Revenue per shopper</dt></div>{% endif %}
   <div class="figure"><dd>{% if kpi.peak_wait is not none %}{{ '%.1f'|format(kpi.peak_wait) }} <small>min</small>{% else %}n/a{% endif %}</dd><dt>Longest estimated checkout wait</dt></div>
 </dl>
 

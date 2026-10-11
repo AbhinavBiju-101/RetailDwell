@@ -11,6 +11,7 @@ import secrets
 
 import pandas as pd
 
+from config import POS_MAX_LINES, POS_MAX_TXNS
 from stores import ZONE_TYPES
 
 MAX_ZONES = 40
@@ -18,6 +19,7 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_UPLOAD_ROWS = 3_000_000
 MAX_INGEST_POINTS = 5000
 KEEP_COLS = ["track_id", "t", "x", "y"]
+POS_COLS = ["txn_id", "t", "zone", "amount"]
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,8}$")
 
@@ -139,6 +141,64 @@ def points_from_json(points, w, h):
             raise ValidationError("Each point must have exactly track_id, t, x and y. Nothing else is accepted.")
         rows.append([p[c] for c in KEEP_COLS])
     return clean_points_frame(pd.DataFrame(rows, columns=KEEP_COLS), w, h)
+
+
+# ---- sales (POS): exactly txn_id, t, zone, amount. No card, loyalty, cashier or customer columns exist.
+def clean_pos_frame(df):
+    df = df[POS_COLS].copy()
+    df["txn_id"] = df["txn_id"].astype(str).str.strip()
+    df["zone"] = df["zone"].astype(str).str.strip()
+    for c in ("t", "amount"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    before = len(df)
+    df = df[(df.txn_id != "") & (df.txn_id.str.lower() != "nan") & (df.zone != "") & (df.zone.str.lower() != "nan")].dropna()
+    if df.empty:
+        raise ValidationError("No usable rows. Each row needs a sale id, a time in seconds, a zone name and an amount.")
+    if len(df) < before * 0.9:
+        raise ValidationError("More than 10% of rows were not usable. Check that t and amount are numbers and that no cell is empty.")
+    if (df.t < 0).any() or (df.t > 10_000_000).any():
+        raise ValidationError("t must be seconds since the recording started (0 or more).")
+    if (df.amount <= 0).any() or (df.amount > 10_000_000).any():
+        raise ValidationError("Every amount must be above 0. Leave refunds out of this file.")
+    if (df.txn_id.str.len() > 40).any() or (df.zone.str.len() > 40).any():
+        raise ValidationError("Sale ids and zone names must be 40 characters or fewer.")
+    df["amount"] = df["amount"].round(2)
+    df["t"] = df.groupby("txn_id")["t"].transform("min").round(1)   # one time per sale
+    df = df.groupby(["txn_id", "t", "zone"], as_index=False)["amount"].sum()
+    if df.txn_id.nunique() > POS_MAX_TXNS:
+        raise ValidationError(f"Use at most {POS_MAX_TXNS:,} sales per recording. Split a longer day into several recordings.")
+    return df.sort_values(["t", "txn_id", "zone"]).reset_index(drop=True)
+
+
+def pos_from_csv(data):
+    """Parse an uploaded sales CSV (bytes). Keeps only txn_id, t, zone, amount; other columns are dropped."""
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise ValidationError("That file is larger than 50 MB.")
+    try:
+        df = pd.read_csv(io.BytesIO(data), nrows=POS_MAX_LINES + 1, dtype=str)
+    except Exception:
+        raise ValidationError("That file could not be read as CSV (plain or .gz).")
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    missing = [c for c in POS_COLS if c not in df.columns]
+    if missing:
+        raise ValidationError("The CSV needs the columns txn_id, t, zone and amount. Missing: " + ", ".join(missing) + ".")
+    if len(df) > POS_MAX_LINES:
+        raise ValidationError(f"That file has more than {POS_MAX_LINES:,} rows.")
+    return clean_pos_frame(df[POS_COLS])
+
+
+def pos_from_json(rows):
+    """Validate a batch of sales lines from the ingest API. Extra fields are rejected."""
+    if not isinstance(rows, list) or not rows:
+        raise ValidationError("sales must be a non-empty list.")
+    if len(rows) > 1000:
+        raise ValidationError("Send at most 1,000 sales lines per request.")
+    out = []
+    for r in rows:
+        if not isinstance(r, dict) or set(r) != set(POS_COLS):
+            raise ValidationError("Each sales line must have exactly txn_id, t, zone and amount. Nothing else is accepted.")
+        out.append([r[c] for c in POS_COLS])
+    return clean_pos_frame(pd.DataFrame(out, columns=POS_COLS))
 
 
 # ---- API keys: only a hash is stored; the plain key is shown once
