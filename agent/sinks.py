@@ -38,11 +38,13 @@ class CsvSink:
 
 class ApiSink:
     def __init__(self, base_url, key, layout, recording, batch=2000, flush_s=5.0, spool_dir=None,
-                 session=None, retries=4, backoff_s=1.0, timeout_s=20.0, clock=time.monotonic, sleep=time.sleep):
+                 session=None, retries=4, backoff_s=1.0, timeout_s=20.0, clock=time.monotonic, sleep=time.sleep,
+                 started_at=None):
         if not key:
             raise SinkError("No API key. Set DWELL_API_KEY (Settings > API keys in the app).")
         self.url = base_url if base_url.rstrip("/").endswith(INGEST_PATH) else base_url.rstrip("/") + INGEST_PATH
         self.key, self.layout, self.recording = key, layout, recording
+        self.started_at = started_at        # ISO UTC time the run began: the server keeps the first one it hears
         self.batch, self.flush_s = min(int(batch), MAX_BATCH), flush_s
         self.spool_dir = spool_dir
         self.retries, self.backoff, self.timeout = retries, backoff_s, timeout_s
@@ -75,6 +77,8 @@ class ApiSink:
     # -- internals
     def _send(self, chunk):
         body = {"layout": self.layout, "recording": self.recording, "points": chunk}
+        if self.started_at:
+            body["started_at"] = self.started_at
         for attempt in range(self.retries + 1):
             try:
                 r = self.session.post(self.url, json=body, headers={"Authorization": f"Bearer {self.key}"},
@@ -105,7 +109,7 @@ class ApiSink:
         os.makedirs(self.spool_dir, exist_ok=True)
         path = os.path.join(self.spool_dir, f"spool_{int(time.time() * 1000)}_{len(os.listdir(self.spool_dir))}.json.gz")
         with gzip.open(path, "wt") as fh:
-            json.dump({"layout": self.layout, "recording": self.recording, "points": chunk}, fh)
+            json.dump({"layout": self.layout, "recording": self.recording, "points": chunk, "started_at": self.started_at}, fh)
         log.warning("server unreachable: kept %d points in %s", len(chunk), path)
 
     def resend_spool(self):

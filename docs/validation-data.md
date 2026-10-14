@@ -26,3 +26,5 @@ ground-truth positions on the floor plane, not only boxes in the image. Research
 Caveats to keep honest: MMPTRACK has 6 overlapping cameras and the agent is single-camera, so the agent will be tested on one view at a time and
 the result is a lower bound for an occluded retail floor. No public dataset here pairs real store video with till data, so the sales matching
 can only be validated on simulation (done: 95.7% to 100% of usable matches correct) until a pilot store provides a POS export and a camera.
+
+Update: track stitching is built and measured on the synthetic scene (see `docs/context.md`). On MMPTRACK, score with and without `--no-stitch` and report both, because the stitching settings were tuned on drawn people.

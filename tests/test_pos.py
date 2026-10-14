@@ -92,7 +92,10 @@ def test_sales_validation():
     df = val.pos_from_csv(csv)
     assert list(df.columns) == ["txn_id", "t", "zone", "amount"] and df.txn_id.nunique() == 2
     assert set(df[df.txn_id == "A1"].t) == {10.0}                    # one time per sale
-    for bad in (b"txn_id,t,zone\nA,1,Z\n", b"txn_id,t,zone,amount\nA,1,Z,-4\n", b"txn_id,t,zone,amount\nA,-1,Z,4\n"):
+    # a sale a second before the recording started is clock drift, not an error: it is kept at time 0
+    assert val.pos_from_csv(b"txn_id,t,zone,amount\nA,-1,Z,4\nB,30,Z,4\n").t.tolist() == [0.0, 30.0]
+    for bad in (b"txn_id,t,zone\nA,1,Z\n", b"txn_id,t,zone,amount\nA,1,Z,-4\n",
+                b"txn_id,t,zone,amount\nA,-500,Z,4\n"):                                   # 500 s early: before the recording, nothing left
         try:
             val.pos_from_csv(bad)
             raise AssertionError("accepted")
@@ -165,10 +168,13 @@ def test_revenue_map_hides_thin_cells_and_before_after_compares_per_shopper():
     assert pos.compare_revenue(Ra, Rb2) is None
 
 
-def test_demo_tracks_are_unchanged_by_adding_sales():
-    a = simulate.generate("corner-pharmacy")["A"][0]
+def test_demo_shoppers_are_unchanged_by_adding_sales_staff_and_companions():
+    base = simulate.generate("corner-pharmacy")["A"][0]
     b = simulate.generate_with_sales("corner-pharmacy")["A"][0]
-    assert a.equals(b)
+    assert b[b.track_id.isin(base.track_id.unique())].reset_index(drop=True).equals(base.reset_index(drop=True))
+    assert b.track_id.nunique() > base.track_id.nunique()                      # companions and staff were added on top
+    g = simulate.generate("lakeside-grocery")["A"][0]
+    assert g.equals(simulate.generate_with_sales("lakeside-grocery")["A"][0])  # stores without a crowd entry are untouched
 
 
 # ------------------------------------------------------------------ the app, end to end

@@ -38,6 +38,7 @@ def _auth_error(e):
 
 class SupabaseRepo(Repo):
     mode = "supabase"
+    supports_oauth = True
 
     def __init__(self, url, anon_key, service_key, client=None):
         self.c = client or Supabase(url, anon_key, service_key)
@@ -68,6 +69,15 @@ class SupabaseRepo(Repo):
     def sign_in(self, email, password):
         try:
             return self._session(self.c.sign_in(email, password))
+        except SupaError as e:
+            raise _auth_error(e)
+
+    def oauth_start(self, provider, redirect_to, code_challenge):
+        return self.c.oauth_url(provider, redirect_to, code_challenge)
+
+    def oauth_finish(self, code, code_verifier):
+        try:
+            return self._session(self.c.exchange_pkce(code, code_verifier))
         except SupaError as e:
             raise _auth_error(e)
 
@@ -122,7 +132,7 @@ class SupabaseRepo(Repo):
         return self._user(sess, self.c.insert, "stores", sess["access_token"], [row])[0]
 
     def update_store(self, sess, store_id, values):
-        allowed = {"name", "kind", "blurb", "width_m", "height_m", "window_s", "hero_zone"}
+        allowed = {"name", "kind", "blurb", "width_m", "height_m", "window_s", "hero_zone", "timezone", "settings"}
         values = {k: v for k, v in values.items() if k in allowed}
         rows = self._user(sess, self.c.update, "stores", sess["access_token"], {"id": f"eq.{store_id}"}, values)
         if not rows:
@@ -223,6 +233,21 @@ class SupabaseRepo(Repo):
                              dict(storage_path=path, n_points=int(len(df)), n_tracks=int(df.track_id.nunique()),
                                   updated_at=_now()))[0]
 
+    def delete_dataset(self, dataset, store):
+        # Files first: if they cannot be removed the row stays, so nothing is left behind unseen and the delete can be retried.
+        try:
+            self.c.remove("tracks", [f"{store['id']}/{dataset['id']}.csv.gz", self._pos_path(dataset, store)])
+        except SupaError as e:
+            raise RepoError("The recording's files could not be removed, so nothing was deleted. Try again.") from e
+        self.c.delete("datasets", self.svc, {"id": f"eq.{dataset['id']}"})
+
+    def set_dataset_start(self, dataset, started_at):
+        try:
+            rows = self.c.update("datasets", self.svc, {"id": f"eq.{dataset['id']}"}, dict(started_at=started_at, updated_at=_now()))
+        except SupaError as e:
+            raise RepoError("The database has no start-time column yet. Run supabase/migrations/20261011000000_start_time.sql, then try again.") from e
+        return rows[0] if rows else dataset
+
     # Sales lines live in the private `tracks` bucket under pos/, so no schema change or new bucket is needed.
     def _pos_path(self, dataset, store):
         return f"pos/{store['id']}/{dataset['id']}.csv.gz"
@@ -263,7 +288,7 @@ class SupabaseRepo(Repo):
 
     def seed_demo_store(self, slug, spec, frames, sales=None):
         fields = dict(name=spec["name"], kind=spec["kind"], blurb=spec["blurb"], width_m=spec["w"], height_m=spec["h"],
-                      window_s=spec["window_s"], hero_zone=spec["hero"])
+                      window_s=spec["window_s"], hero_zone=spec["hero"], timezone=spec.get("timezone", "UTC"))
         rows = self.c.select("stores", self.svc, {"select": "*", "slug": f"eq.{slug}", "limit": "1"})
         if rows:
             store = self.c.update("stores", self.svc, {"id": f"eq.{rows[0]['id']}"}, fields)[0]
@@ -275,6 +300,8 @@ class SupabaseRepo(Repo):
                                    upsert_on="store_id,key")[0]
             ds = self.svc_get_or_create_dataset(layout["id"], "Simulated day", "simulated")
             ds = self.save_tracks(ds, store, frames[key])
+            if lay.get("starts"):
+                ds = self.set_dataset_start(ds, lay["starts"])
             if sales and key in sales:
                 self.save_pos(ds, store, sales[key])
         return store

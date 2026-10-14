@@ -20,10 +20,10 @@ from validation import hash_key, new_api_key
 SCHEMA = """
 create table if not exists users (id text primary key, email text unique not null, name text, role text not null default 'owner', pw_hash text not null, created_at text);
 create table if not exists stores (id text primary key, owner_id text, slug text unique, name text not null, kind text, blurb text,
-  width_m real not null, height_m real not null, window_s integer default 300, hero_zone text, plan_path text, is_demo integer default 0, created_at text);
+  width_m real not null, height_m real not null, window_s integer default 300, hero_zone text, plan_path text, is_demo integer default 0, created_at text, timezone text default 'UTC', settings text default '{}');
 create table if not exists layouts (id text primary key, store_id text not null, key text not null, label text not null, zones text not null default '{}', created_at text, unique (store_id, key));
 create table if not exists datasets (id text primary key, layout_id text not null, label text not null, source text not null, storage_path text,
-  n_points integer default 0, n_tracks integer default 0, observed_on text, created_at text, updated_at text, unique (layout_id, label));
+  n_points integer default 0, n_tracks integer default 0, observed_on text, created_at text, updated_at text, started_at text, unique (layout_id, label));
 create table if not exists ingest_points (dataset_id text not null, track_id integer not null, t real not null, x real not null, y real not null);
 create index if not exists ingest_points_ds on ingest_points (dataset_id, track_id, t);
 create table if not exists api_keys (id text primary key, store_id text not null, label text, prefix text, key_hash text unique not null, created_at text, last_used_at text, revoked_at text);
@@ -45,6 +45,15 @@ class LocalRepo(Repo):
         self.lock = threading.RLock()
         with self.lock:
             self.db.executescript(SCHEMA)
+            self._migrate()
+
+    def _migrate(self):
+        """Columns added after a database was first created."""
+        for table, col, ddl in [("stores", "timezone", "text default 'UTC'"), ("stores", "settings", "text default '{}'"),
+                                   ("datasets", "started_at", "text")]:
+            if col not in {r[1] for r in self.db.execute(f"pragma table_info({table})")}:
+                self.db.execute(f"alter table {table} add column {col} {ddl}")
+        self.db.commit()
 
     # ---------------------------------------------------------------- plumbing
     def _all(self, sql, args=()):
@@ -64,6 +73,10 @@ class LocalRepo(Repo):
     def _store(row):
         if row:
             row["is_demo"] = bool(row["is_demo"])
+            try:
+                row["settings"] = json.loads(row.get("settings") or "{}")
+            except ValueError:
+                row["settings"] = {}
         return row
 
     @staticmethod
@@ -154,8 +167,10 @@ class LocalRepo(Repo):
 
     def update_store(self, sess, store_id, values):
         self._owned(sess, store_id)
-        allowed = {"name", "kind", "blurb", "width_m", "height_m", "window_s", "hero_zone"}
+        allowed = {"name", "kind", "blurb", "width_m", "height_m", "window_s", "hero_zone", "timezone", "settings"}
         values = {k: v for k, v in values.items() if k in allowed}
+        if "settings" in values:
+            values["settings"] = json.dumps(values["settings"])
         if values:
             cols = ", ".join(f"{k} = ?" for k in values)
             self._run(f"update stores set {cols} where id = ?", (*values.values(), store_id))
@@ -208,7 +223,7 @@ class LocalRepo(Repo):
         for lid in layout_ids:
             l = self._one("select store_id from layouts where id = ?", (lid,))
             if l and self._visible(sess, l["store_id"]):
-                out += self._all("select * from datasets where layout_id = ? order by created_at desc", (lid,))
+                out += self._all("select * from datasets where layout_id = ? order by created_at desc, rowid desc", (lid,))
         return out
 
     def create_dataset(self, sess, layout_id, label, source, observed_on=None):
@@ -274,6 +289,17 @@ class LocalRepo(Repo):
                   (path, int(len(df)), int(df.track_id.nunique()), _now(), dataset["id"]))
         return self._one("select * from datasets where id = ?", (dataset["id"],))
 
+    def delete_dataset(self, dataset, store):
+        for path in (dataset.get("storage_path"), self._path("pos", store["id"], f"{dataset['id']}.csv.gz")):
+            if path and os.path.exists(path):
+                os.remove(path)
+        self._run("delete from datasets where id = ?", (dataset["id"],))
+
+    def set_dataset_start(self, dataset, started_at):
+        """started_at: ISO UTC text, or None to clear. Bumps updated_at so cached analyses are rebuilt."""
+        self._run("update datasets set started_at = ?, updated_at = ? where id = ?", (started_at, _now(), dataset["id"]))
+        return self._one("select * from datasets where id = ?", (dataset["id"],))
+
     def save_pos(self, dataset, store, df):
         path = self._path("pos", store["id"], f"{dataset['id']}.csv.gz")
         df[["txn_id", "t", "zone", "amount"]].to_csv(path, index=False)
@@ -322,7 +348,8 @@ class LocalRepo(Repo):
                       "values (?,?,?,?,?,?,?,?,?,?,1,?)",
                       (sid, None, slug, spec["name"], spec["kind"], spec["blurb"], spec["w"], spec["h"], spec["window_s"], spec["hero"], _now()))
             s = self._one("select * from stores where slug = ?", (slug,))
-        s = self._store(s)
+        self._run("update stores set timezone = ? where id = ?", (spec.get("timezone", "UTC"), s["id"]))
+        s = self._store(self._one("select * from stores where id = ?", (s["id"],)))
         for key, lay in spec["layouts"].items():
             zones = {n: list(z) for n, z in lay["zones"].items()}
             ex = self._one("select id from layouts where store_id = ? and key = ?", (s["id"], key))
@@ -335,6 +362,8 @@ class LocalRepo(Repo):
                           (lid, s["id"], key, lay["label"], json.dumps(zones), _now()))
             ds = self.svc_get_or_create_dataset(lid, "Simulated day", "simulated")
             self.save_tracks(ds, s, frames[key])
+            if lay.get("starts"):
+                self.set_dataset_start(ds, lay["starts"])
             if sales and key in sales:
                 self.save_pos(ds, s, sales[key])
         return s

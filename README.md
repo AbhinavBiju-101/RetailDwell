@@ -70,6 +70,19 @@ Sales turn the dwell data into revenue per shopper and a buy rate for every zone
 - From the till: `POST /api/ingest/v1/sales` with a store API key and `{"layout": "A", "recording": "Live", "sales": [...]}`. Repeating a line is safe.
 - The demo stores include simulated sales. Run `python seed_demo.py` again to add them to an existing demo.
 
+## Optional settings
+
+- **Recording start time and timezone.** Settings, Store details for the timezone; Settings, Layouts and recordings for each recording's start. With them, time-of-day findings read as clock times and a till export can use real timestamps. Supabase users run `supabase/migrations/20261011000000_start_time.sql` first. The camera agent sends the start time for live sources, or use `--started-at 2026-10-10T14:00+05:30`.
+- **Staff.** Draw a zone of type `staff` (behind the counter, stockroom door). Tracks that spend time there, stand at the register for 10 minutes, or stay on the floor for 40 minutes are left out of every figure, and Overview says how many and why.
+- **Store-manager brief.** The Brief page always shows a standard summary. Set `GEMINI_API_KEY` (and optionally `GEMINI_MODEL`) to let a store owner press "Write it with Gemini". Only summary figures are sent. If Gemini is unavailable, over quota, or returns something unusable, the standard summary is shown with a warning that says why. `BRIEF_DAILY_LIMIT` caps calls per store per day.
+- **Sign in with Google.** Create a Google OAuth client (Web application) whose authorised redirect URI is `https://<project>.supabase.co/auth/v1/callback`, enable Google under Authentication, Providers in Supabase with its client ID and secret, add `https://<your app>/auth/callback` to Supabase's redirect URLs, then set `GOOGLE_SIGNIN=1`. The button appears on the sign-in page.
+
+## Detection settings, several days, several cameras
+
+- **Detection settings.** Settings, Detection settings lets you change the staff, party, camera-merging, stitching and sales-matching rules for a store. Each has a range and an explanation. Staff, party, merging and sales settings re-analyse existing recordings at once; stitching settings are fetched by the camera agent when it starts. The defaults were set on simulated data, so check them against your own footage. Supabase users run `supabase/migrations/20261012000000_settings.sql` first.
+- **Several days.** Add more than one recording to a layout (Settings, Layouts and recordings) and pick "All days pooled" on any page. Give each recording a start time so hour-by-hour findings can line the days up. Weekdays and weekends are pooled as they are, so delete a recording that does not belong. Deleting removes its tracks and its sales file.
+- **Several cameras.** Run one agent per camera, each with its own calibration to the same floor coordinates, the same `--layout` and `--recording`, and its own number: `python -m agent run ... --api URL --key KEY --layout A --camera 1`. Camera 0 (the default) behaves exactly as before. The server merges people seen by more than one camera and joins hand-overs between cameras. Overview shows how far apart the cameras place the same person where they overlap; if that approaches the 0.8 m limit, recalibrate before trusting the counts.
+
 ## Camera agent
 
 Turns a video file, camera or RTSP stream into the four-field points above. Frames stay in memory for one

@@ -5,6 +5,7 @@ checkout throughput, normalised before/after comparison, relative flags.
 import math
 import numpy as np
 import pandas as pd
+import thresholds
 from config import (TIME_WINDOW_S, TIME_MIN_SHOPPERS, TIME_MIN_EXPECTED, TIME_MIN_Z, DWELL_RADIUS_M, DWELL_MIN_S, MIN_PRESENCE_S, SAMPLE_HZ,
                     QUEUE_MARGIN_M)
 
@@ -23,6 +24,95 @@ def assign_zone(df, zones):
         m = ((df["x"] >= x0) & (df["x"] <= x1) & (df["y"] >= y0) & (df["y"] <= y1)).to_numpy()
         zone[m] = name
     return zone
+
+
+# ---------- staff and parties ----------
+def _inside(tracks, zones, ztype):
+    m = np.zeros(len(tracks), dtype=bool)
+    for x0, y0, x1, y1, t in zones.values():
+        if t == ztype:
+            m |= ((tracks["x"] >= x0) & (tracks["x"] <= x1) & (tracks["y"] >= y0) & (tracks["y"] <= y1)).to_numpy()
+    return m
+
+
+def find_staff(tracks, zones, params=None):
+    """Tracks that behave like staff: {track_id: reason}. Nobody is identified, only behaviour is read:
+    time in a zone of type staff, a long stand inside the checkout zone (a cashier), or being on the floor far
+    longer than a shopper (only judged when the recording is at least twice that long). Excluded tracks are
+    reported in the app with the reason, so a wrong call can be seen."""
+    if tracks.empty:
+        return {}
+    p = {**thresholds.defaults(), **(params or {})}
+    tid = tracks["track_id"].to_numpy()
+    sec = lambda mask: pd.Series(mask.astype(float) * DT).groupby(tid).sum()
+    in_staff, in_till = sec(_inside(tracks, zones, "staff")), sec(_inside(tracks, zones, "checkout"))
+    span = tracks.groupby("track_id")["t"].agg(lambda s: s.max() - s.min())
+    long_ok = (tracks["t"].max() - tracks["t"].min()) >= 2 * p["staff_min_duration_s"]
+    out = {}
+    for t in span.index:
+        if in_staff.get(t, 0) >= p["staff_zone_min_s"]:
+            out[int(t)] = "spent time in a staff zone"
+        elif in_till.get(t, 0) >= p["staff_checkout_min_s"]:
+            out[int(t)] = f"stood at the register for {in_till[t] / 60:.0f} minutes"
+        elif long_ok and span[t] >= p["staff_min_duration_s"]:
+            out[int(t)] = f"on the floor for {span[t] / 60:.0f} minutes"
+    return out
+
+
+def find_parties(df, params=None):
+    """People who move together (family, friends) from how close their paths stay: within PARTY_DIST_M for at
+    least PARTY_MIN_S and PARTY_MIN_FRAC of the shorter visit, with some of that time walking, so two strangers
+    queueing side by side are not joined. They must also appear and disappear together (within PARTY_ENTRY_GAP_S):
+    people in a queue stay close for minutes but arrive at different times and leave one service apart. Clusters
+    bigger than PARTY_MAX_SIZE are left alone.
+    Returns dict(of={track_id: party_id}, sizes={party_id: n}); a party id is its smallest track id."""
+    p = {**thresholds.defaults(), **(params or {})}
+    d = df[["track_id", "t", "x", "y"]].copy()
+    d["k"] = (d["t"] * SAMPLE_HZ).round().astype(int)
+    d = d.sort_values(["track_id", "k"]).drop_duplicates(["track_id", "k"])      # one point per track per half-second
+    gap = d.groupby("track_id")["k"].diff().fillna(1).clip(lower=1) / SAMPLE_HZ
+    d["moving"] = (np.hypot(d.groupby("track_id")["x"].diff(), d.groupby("track_id")["y"].diff()) / gap > 0.3).to_numpy()
+    n_bins = d.groupby("track_id").size()
+    first, last = d.groupby("track_id")["t"].min(), d.groupby("track_id")["t"].max()
+    order = first.sort_values()
+    cand, ids_o, t_o = set(), order.index.to_numpy(), order.to_numpy()
+    for i in range(len(ids_o)):                                   # pairs that arrive together and leave together
+        j = i + 1
+        while j < len(ids_o) and t_o[j] - t_o[i] <= p["party_entry_gap_s"]:
+            if abs(last[ids_o[i]] - last[ids_o[j]]) <= p["party_entry_gap_s"]:
+                cand.add((int(min(ids_o[i], ids_o[j])), int(max(ids_o[i], ids_o[j]))))
+            j += 1
+    by = {int(t): (g["k"].to_numpy(), g["x"].to_numpy(), g["y"].to_numpy(), g["moving"].to_numpy()) for t, g in d.groupby("track_id")}
+    co, co_move = {}, {}
+    for a, b in cand:                                             # score each candidate pair on the bins both are present
+        ka, xa, ya, ma = by[a]
+        kb, xb, yb, mb = by[b]
+        _, ia, ib = np.intersect1d(ka, kb, assume_unique=True, return_indices=True)
+        if len(ia) == 0:
+            continue
+        close = np.hypot(xa[ia] - xb[ib], ya[ia] - yb[ib]) <= p["party_dist_m"]
+        co[(a, b)] = int(close.sum())
+        co_move[(a, b)] = int((close & (ma[ia] | mb[ib])).sum())
+    parent = {int(t): int(t) for t in n_bins.index}
+    size = {t: 1 for t in parent}
+
+    def root(t):
+        while parent[t] != t:
+            parent[t] = parent[parent[t]]
+            t = parent[t]
+        return t
+    for (a, b), c in sorted(co.items(), key=lambda kv: -kv[1]):
+        if c * DT >= p["party_min_s"] and c >= p["party_min_frac"] * min(n_bins[a], n_bins[b]) and co_move.get((a, b), 0) * DT >= p["party_min_moving_s"]:
+            ra, rb = root(a), root(b)
+            if ra != rb and size[ra] + size[rb] <= p["party_max_size"]:
+                lo, hi = min(ra, rb), max(ra, rb)
+                parent[hi] = lo
+                size[lo] += size[hi]
+    of = {t: root(t) for t in parent}
+    sizes = {}
+    for t, r in of.items():
+        sizes[r] = sizes.get(r, 0) + 1
+    return dict(of=of, sizes=sizes)
 
 
 # ---------- dwell by displacement ----------
@@ -245,7 +335,8 @@ def relative_flags(stats, labels):
     return pd.DataFrame(flags)
 
 
-def flag_checkout(cm):
+def flag_checkout(cm, where=None):
+    where = where or (lambda m: f"minute {m:.0f}")
     ok = cm[cm.valid & cm.est_wait_min.notna()]
     if ok.empty:
         return None
@@ -254,21 +345,23 @@ def flag_checkout(cm):
     return dict(kind=sev, window_start_min=peak.window_start_min,
                 est_wait_min=peak.est_wait_min, occupancy=peak.occupancy,
                 throughput=peak.throughput_per_min,
-                message=(f"Checkout: about {peak.est_wait_min:.1f} min estimated wait around minute "
-                         f"{peak.window_start_min:.0f} ({peak.occupancy:.1f} people, "
+                message=(f"Checkout: about {peak.est_wait_min:.1f} min estimated wait around "
+                         f"{where(peak.window_start_min)} ({peak.occupancy:.1f} people, "
                          f"{peak.throughput_per_min:.1f} served/min). Indicative only; Little's law "
                          f"assumes steady state."))
 
 
 # ---------- each zone against its own usual share, by time window ----------
-def time_baselines(df, labels, zones, window_s=TIME_WINDOW_S):
+def time_baselines(df, labels, zones, window_s=TIME_WINDOW_S, slot_fn=None):
     """Share of shoppers reaching each merchandise zone per time window, against the zone's own average.
 
     Normalised by the shoppers present in the window, so a busy hour does not look like a good hour for every zone.
     A window is flagged only when it is both 30%+ away from the zone's norm and unlikely to be chance
     (normal approximation to a binomial, |z| >= TIME_MIN_Z).
     Returns dict(window_s, windows, cells, reason): `reason` is set (and cells empty) when there is too little data.
-    t is seconds since the recording started; real clock time is not stored.
+    t is seconds since the recording started; windows are labelled with wall-clock time by the app when the
+    recording has a start time (clock.py). With `slot_fn` (pooled days) windows are the clock hours of the day and
+    gather shoppers from every pooled day; start_min and end_min are then minutes since midnight.
     """
     shoppers = labels[labels.mission != "loiterer / waiter"].track_id
     d = df[df.track_id.isin(shoppers)].copy()
@@ -276,7 +369,7 @@ def time_baselines(df, labels, zones, window_s=TIME_WINDOW_S):
     if d.empty:
         out["reason"] = "No shopper tracks yet."
         return out
-    d["w"] = (d.t // window_s).astype(int)
+    d["w"] = slot_fn(d.t.to_numpy()) if slot_fn else (d.t // window_s).astype(int)
     n_w = d.groupby("w").track_id.nunique()
     valid = n_w[n_w >= TIME_MIN_SHOPPERS].index.tolist()
     if len(valid) < 2:
@@ -308,32 +401,50 @@ def time_baselines(df, labels, zones, window_s=TIME_WINDOW_S):
     return out
 
 
-def timing_flags(tb, limit=6):
+def timing_flags(tb, limit=6, span=None):
     """Plain-language findings for the unusual zone-windows, strongest first."""
     rows = []
+    span = span or (lambda a, b: f"minutes {a} and {b}")      # a Clock supplies wall-clock wording
     mins = {w["w"]: (w["start_min"], w["end_min"]) for w in tb.get("windows", [])}
     for c in sorted((c for c in tb.get("cells", []) if c["flag"]), key=lambda c: -abs(c["z"]))[:limit]:
         a, b = mins[c["w"]]
         pct = abs(1 - c["ratio"])
         if c["flag"] == "low":
             rows.append(dict(kind="Quieter than usual", zone=c["zone"], w=c["w"], message=(
-                f"{c['zone']}: {pct:.0%} fewer shoppers than its own usual share between minutes {a} and {b} "
+                f"{c['zone']}: {pct:.0%} fewer shoppers than its own usual share between {span(a, b)} "
                 f"({c['visitors']} reached it, about {c['expected']:.0f} expected). Look for a cause at that time: "
                 f"stock out, a blocked route, a promotion elsewhere or fewer staff nearby.")))
         else:
             rows.append(dict(kind="Busier than usual", zone=c["zone"], w=c["w"], message=(
-                f"{c['zone']}: {pct:.0%} more shoppers than its own usual share between minutes {a} and {b} "
+                f"{c['zone']}: {pct:.0%} more shoppers than its own usual share between {span(a, b)} "
                 f"({c['visitors']} reached it, about {c['expected']:.0f} expected). If that was a promotion or "
                 f"an event, it worked. If not, find out what drew people there.")))
     return rows
 
 
 # ---------- one-call API used by the dashboard ----------
-def analyse_layout(tracks, zones, w, h, window_s=300):
-    """Full analysis of one recording. `zones` is {name: (x0, y0, x1, y1, type)}."""
+def analyse_layout(tracks, zones, w, h, window_s=300, exclude_staff=True, params=None, pooled=None):
+    """Full analysis of one recording. `zones` is {name: (x0, y0, x1, y1, type)}.
+    Tracks that look like staff are left out of every figure and listed under R["staff"]."""
+    p = {**thresholds.defaults(), **(params or {})}
+    staff = find_staff(tracks, zones, p) if exclude_staff and p["staff_filter"] else {}
+    if staff:
+        tracks = tracks[~tracks["track_id"].isin(list(staff))]
     df, presence, episodes = build_events(tracks, zones)
     labels = label_visits(df, zones, presence, episodes)
     stats = zone_stats(zones, presence, episodes, labels)
+    pooled = pooled or {}
+    if pooled.get("n"):
+        if pooled.get("slot_fn"):
+            timing = time_baselines(df, labels, zones, slot_fn=pooled["slot_fn"])
+        else:
+            timing = dict(window_s=TIME_WINDOW_S, windows=[], cells=[],
+                          reason="To line the hours up across days, every pooled recording needs a start time. Set them in Settings.")
+    else:
+        timing = time_baselines(df, labels, zones)
+    checkout = checkout_metrics(df, zones, window_s)
+    if pooled.get("minute_of_day_fn") and len(checkout):          # pooled checkout windows: show them by clock time, days overlaid
+        checkout = checkout.assign(window_start_min=pooled["minute_of_day_fn"](checkout["window_start_min"].to_numpy() * 60.0))
     return dict(zones=zones, w=w, h=h, df=df, presence=presence, episodes=episodes, labels=labels,
-                stats=stats, flags=relative_flags(stats, labels), timing=time_baselines(df, labels, zones),
-                checkout=checkout_metrics(df, zones, window_s))
+                stats=stats, flags=relative_flags(stats, labels), timing=timing,
+                checkout=checkout, pooled=pooled or None, staff=staff, parties=find_parties(df, p) if len(df) and p["parties_enabled"] else dict(of={}, sizes={}), params=p)

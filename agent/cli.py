@@ -10,6 +10,7 @@ import argparse
 import json
 import logging
 import os
+import secrets
 import sys
 import tempfile
 import time
@@ -98,6 +99,29 @@ def _build_detector(a):
     return YoloDetector(a.model, conf=a.conf, imgsz=a.imgsz, device=a.device)
 
 
+CAMERA_SHIFT = 48          # must equal fusion.CAMERA_SHIFT on the server (a test checks it)
+MAX_CAMERA = 31
+STITCH_KEYS = ("stitch", "stitch_max_gap_s", "stitch_base_m", "stitch_speed_mps", "stitch_min_gap_s", "stitch_edge_m")
+
+
+def fetch_server_settings(base_url, key, http=None):
+    """The store's stitching settings from the server, or {} (the built-in defaults) if it cannot be reached.
+    Only known keys are used, so a newer server cannot break an older agent."""
+    log = logging.getLogger("agent")
+    try:
+        if http is None:
+            import requests as http
+        r = http.get(base_url.rstrip("/") + "/api/ingest/v1/config", headers={"Authorization": f"Bearer {key}"}, timeout=10)
+        if r.status_code != 200:
+            log.warning("could not read the store's settings from the server (HTTP %s); using the defaults", r.status_code)
+            return {}
+        got = (r.json() or {}).get("settings") or {}
+        return {k: got[k] for k in STITCH_KEYS if k in got}
+    except Exception as e:
+        log.warning("could not read the store's settings from the server (%s); using the defaults", e)
+        return {}
+
+
 def cmd_run(a):
     from .pipeline import Pipeline, run_source
     from .sinks import ApiSink, CsvSink
@@ -105,13 +129,26 @@ def cmd_run(a):
     log = logging.getLogger("agent")
     log.info("calibration: RMS %.2f m (%s)", floor.rms_m, floor.quality())
     if a.api:
-        sink = ApiSink(a.api, os.environ.get("DWELL_API_KEY", a.key), a.layout,
-                       a.recording or time.strftime("Live %Y-%m-%d"), spool_dir=a.spool_dir)
+        started = _started_at(a)
+        if started:
+            log.info("recording start time sent to the server: %s", started)
+        key = os.environ.get("DWELL_API_KEY", a.key)
+        sink = ApiSink(a.api, key, a.layout, a.recording or time.strftime("Live %Y-%m-%d"), spool_dir=a.spool_dir, started_at=started)
+        settings = {} if a.ignore_server_settings else fetch_server_settings(a.api, key)
+        if settings:
+            log.info("using the store's stitching settings from the server: %s", settings)
     elif a.csv:
-        sink = CsvSink(a.csv)
+        sink, settings = CsvSink(a.csv), {}
     else:
         raise SystemExit("Give --csv FILE or --api URL.")
-    pipe = Pipeline(floor, _build_detector(a), sink, min_track_s=a.min_track_s)
+    settings = dict(settings)
+    if not 0 <= a.camera <= MAX_CAMERA:
+        raise SystemExit(f"--camera must be a number from 0 to {MAX_CAMERA}.")
+    if a.camera:                                    # camera 0 keeps the ids exactly as before
+        settings["id_base"] = (a.camera << CAMERA_SHIFT) | secrets.randbits(40)
+        log.info("camera %d: track ids carry the camera number so the server can merge cameras", a.camera)
+    settings["stitch"] = bool(settings.get("stitch", True)) and not a.no_stitch        # --no-stitch always wins
+    pipe = Pipeline(floor, _build_detector(a), sink, min_track_s=a.min_track_s, **settings)
     run_source(a.source, pipe, track_fps=a.fps, max_seconds=a.max_seconds, preview=a.preview)
 
 
@@ -140,6 +177,24 @@ def cmd_selftest(a):
         from . import evaluate as ev
         print(ev.format_report(ev.evaluate_tracks(gt, est, zones=synth.ZONES)))
         print("This measures our geometry and tracking on drawn people. It says nothing about real footage.")
+
+
+def _started_at(a):
+    """ISO UTC start time for the server. Given with --started-at (include an offset, e.g. 2026-10-10T14:00+05:30),
+    else the moment the run begins for a live source. A video file has no known start, so none is sent."""
+    from datetime import datetime, timezone
+    if a.started_at:
+        try:
+            d = datetime.fromisoformat(a.started_at.replace("Z", "+00:00"))
+        except ValueError:
+            raise SystemExit("--started-at must look like 2026-10-10T14:00+05:30 (with the offset from UTC).")
+        if d.tzinfo is None:
+            raise SystemExit("--started-at needs an offset from UTC, e.g. 2026-10-10T14:00+05:30, so it is not read in the wrong timezone.")
+        return d.astimezone(timezone.utc).isoformat(timespec="seconds")
+    s = str(a.source).lower()
+    if s.isdigit() or s.startswith(("rtsp", "http", "rtmp")):
+        return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return None
 
 
 def cmd_evaluate(a):
@@ -188,6 +243,10 @@ def main(argv=None):
     s.add_argument("--imgsz", type=int, default=640); s.add_argument("--device", default=None)
     s.add_argument("--fps", type=float, default=8.0, help="detection rate"); s.add_argument("--min-track-s", type=float, default=2.0)
     s.add_argument("--max-seconds", type=float); s.add_argument("--preview", action="store_true")
+    s.add_argument("--started-at", help="when the recording began, with a UTC offset, e.g. 2026-10-10T14:00+05:30 (default: now, for a live source)")
+    s.add_argument("--camera", type=int, default=0, help="camera number when several cameras cover one floor (0 for the first or only camera)")
+    s.add_argument("--no-stitch", action="store_true", help="do not re-link tracks that disappear and reappear nearby")
+    s.add_argument("--ignore-server-settings", action="store_true", help="do not fetch the store's stitching settings from the server")
     s.set_defaults(fn=cmd_run)
 
     s = sub.add_parser("evaluate", help="score agent output against ground-truth floor tracks")

@@ -37,8 +37,11 @@ _BIG = 1e6
 
 
 # ---------------------------------------------------------------- register visits
-def register_services(df, zones):
-    """One row per track that stood at a checkout: when its last stop there started and ended."""
+def register_services(df, zones, party_of=None):
+    """One row per track that stood at a checkout: when its last stop there started and ended.
+    With `party_of` ({track_id: party_id}) a party is one row: people who arrive together stand at the register
+    together, and a companion's visit must not look like a second customer. The row carries the party's lowest track id
+    and the mean of its members' end times."""
     cols = ["track_id", "t_start", "t_end"]
     cz = [z for z in zones.values() if z[4] == "checkout"]
     if not cz or df.empty:
@@ -53,7 +56,12 @@ def register_services(df, zones):
         spans = _stop_spans(g.sort_values("t"))
         if spans:
             rows.append((tid, spans[-1][2], spans[-1][3]))
-    return pd.DataFrame(rows, columns=cols)
+    out = pd.DataFrame(rows, columns=cols)
+    if party_of and len(out):
+        out["party"] = out["track_id"].map(lambda t: party_of.get(int(t), int(t)))
+        out = out.groupby("party", as_index=False).agg(track_id=("track_id", "min"), t_start=("t_start", "min"), t_end=("t_end", "mean"))
+        out = out[cols]
+    return out
 
 
 # ---------------------------------------------------------------- clock offset
@@ -99,7 +107,7 @@ def _empty_match(n_txn, n_services, offset=0.0, found=False, tol_s=POS_TOL_S):
         tol_s=tol_s, match_rate=0.0, median_abs_residual_s=None))
 
 
-def match_transactions(services, txns, tol_s=POS_TOL_S, offset_s=None):
+def match_transactions(services, txns, tol_s=POS_TOL_S, offset_s=None, min_conf=POS_MIN_CONF):
     """services: register_services(). txns: DataFrame txn_id, t (one row per sale).
     Returns dict(pairs, summary). `offset_s` forces the clock offset; None estimates it."""
     n_txn, n_srv = len(txns), len(services)
@@ -127,7 +135,7 @@ def match_transactions(services, txns, tol_s=POS_TOL_S, offset_s=None):
             conf = float(np.clip((alt - r) / (alt + r + 1e-9), 0.0, 1.0))
         else:
             conf = 1.0
-        status = "clear" if conf >= POS_CLEAR_CONF else "probable" if conf >= POS_MIN_CONF else "ambiguous"
+        status = "clear" if conf >= POS_CLEAR_CONF else "probable" if conf >= min_conf else "ambiguous"
         rows.append((txns["txn_id"].iloc[i], services["track_id"].iloc[j], t_txn[i], t_end[j],
                      t_txn[i] - t_end[j] - offset, round(conf, 3), status))
     pairs = pd.DataFrame(rows, columns=["txn_id", "track_id", "t_txn", "t_end", "residual_s", "confidence", "status"])
@@ -147,7 +155,7 @@ def _transactions(lines):
     return (lines.groupby("txn_id").agg(t=("t", "min"), amount=("amount", "sum")).reset_index())
 
 
-def analyse_pos(R, lines, tol_s=POS_TOL_S):
+def analyse_pos(R, lines, tol_s=None, min_conf=None):
     """Match the sales to the shoppers of one analysed recording and build the revenue figures.
     Returns None when there are no sales."""
     if lines is None or len(lines) == 0:
@@ -155,25 +163,37 @@ def analyse_pos(R, lines, tol_s=POS_TOL_S):
     lines = lines[POS_COLS].copy()
     txns = _transactions(lines)
     zones = R["zones"]
-    services = register_services(R["df"], zones)
-    match = match_transactions(services, txns, tol_s)
+    party_of = (R.get("parties") or {}).get("of", {})
+    party = lambda t: party_of.get(int(t), int(t))
+    members_of = {}
+    for t_, p_ in party_of.items():
+        members_of.setdefault(p_, []).append(t_)
+    services = register_services(R["df"], zones, party_of)
+    prm = R.get("params") or {}
+    tol_s = tol_s if tol_s is not None else prm.get("pos_tol_s", POS_TOL_S)
+    min_conf = min_conf if min_conf is not None else prm.get("pos_min_conf", POS_MIN_CONF)
+    match = match_transactions(services, txns, tol_s, min_conf=min_conf)
     S = match["summary"]
     pairs = match["pairs"]
     has_checkout = any(z[4] == "checkout" for z in zones.values())
 
     usable = pairs[pairs.status != "ambiguous"]
-    ambiguous = set(pairs[pairs.status == "ambiguous"].track_id)
+    ambiguous = {m for t_ in pairs[pairs.status == "ambiguous"].track_id for m in members_of.get(party(t_), [int(t_)])}
     amount = txns.set_index("txn_id")["amount"]
     spend_by_track = usable.set_index("track_id")["txn_id"].map(amount)
 
     lab = R["labels"][["track_id", "mission", "confidence"]].copy()
     lab["known"] = ~lab.track_id.isin(ambiguous)          # a track tied to an unclear sale: purchase unknown
-    lab["bought"] = lab.track_id.isin(spend_by_track.index)
+    lab["paid"] = lab.track_id.isin(spend_by_track.index)                   # the member whose sale was matched
+    lab["bought"] = lab.track_id.map(party).isin({party(t_) for t_ in spend_by_track.index})   # anyone in a party that paid
     lab["spend"] = lab.track_id.map(spend_by_track).fillna(0.0)
     shop = lab[(lab.mission != LOITERER) & lab.known]
     shop_ids = set(shop.track_id)
 
-    matched_lines = lines.merge(usable[["txn_id", "track_id"]], on="txn_id", how="inner")
+    matched_lines = lines.merge(usable[["txn_id", "track_id"]], on="txn_id", how="inner")      # one payer per sale: revenue
+    each = pd.DataFrame([(r.txn_id, m) for r in usable.itertuples() for m in members_of.get(party(r.track_id), [int(r.track_id)])],
+                        columns=["txn_id", "track_id"])
+    member_lines = lines.merge(each, on="txn_id", how="inner")                                  # every member: who bought what
     total_rev = float(txns.amount.sum())
     matched_rev = float(spend_by_track.sum())
     loit = lab[(lab.mission == LOITERER) & lab.bought]
@@ -183,7 +203,12 @@ def analyse_pos(R, lines, tol_s=POS_TOL_S):
         n_unknown=int((~lab.known & (lab.mission != LOITERER)).sum()),
         buyers=int(shop.bought.sum()), conversion=float(shop.bought.mean()) if len(shop) else None,
         revenue_per_shopper=float(shop.spend.sum() / len(shop)) if len(shop) else None,
-        avg_basket=float(shop[shop.bought].spend.mean()) if shop.bought.any() else None,
+        avg_basket=float(shop[shop.paid].spend.mean()) if shop.paid.any() else None,
+        n_parties=int(sum(1 for v in (R.get("parties") or {}).get("sizes", {}).values() if v > 1)),
+        in_parties=int(sum(v for v in (R.get("parties") or {}).get("sizes", {}).values() if v > 1)),
+        staff_excluded=len(R.get("staff") or {}),
+        revenue_per_party=(float(shop.spend.sum() / shop.track_id.map(party).nunique()) if len(shop) else None),
+        n_units=int(shop.track_id.map(party).nunique()),
         total_revenue=total_rev, matched_revenue=matched_rev,
         coverage=matched_rev / total_rev if total_rev else None,
         loiterer_buyers=int(len(loit)), loiterer_revenue=float(loit.spend.sum()))
@@ -191,24 +216,25 @@ def analyse_pos(R, lines, tol_s=POS_TOL_S):
     missions = []
     for seg in SEGMENTS:
         g = lab[(lab.mission == seg) & lab.known]
-        b = g[g.bought]
+        b, pay = g[g.bought], g[g.paid]
         missions.append(dict(mission=seg, n=int(len(g)), buyers=int(len(b)),
                              conversion=float(len(b) / len(g)) if len(g) else None,
-                             avg_basket=float(b.spend.mean()) if len(b) else None,
+                             avg_basket=float(pay.spend.mean()) if len(pay) else None,
                              revenue_per_visit=float(g.spend.sum() / len(g)) if len(g) else None))
 
-    zone_rows = _zone_funnel(R, shop, shop_ids, matched_lines)
-    miss = _tracking_miss(R, shop_ids, matched_lines)
+    zone_rows = _zone_funnel(R, shop, shop_ids, matched_lines, member_lines)
+    miss = _tracking_miss(R, shop_ids, matched_lines, party_of)
     P = dict(
         match=S, pairs=pairs, kpi=kpi, missions=missions, zones=zone_rows, miss=miss, tol_s=tol_s,
-        has_checkout=has_checkout, shop=shop[["track_id", "spend", "bought"]].reset_index(drop=True),
+        has_checkout=has_checkout, shop=shop[["track_id", "spend", "bought", "paid"]].reset_index(drop=True),
         spend_by_track=spend_by_track, lines=matched_lines, all_lines=lines,
         lab=lab, unmapped=sorted(set(lines.zone) - set(zones) - {UNMAPPED}) if len(lines) else [])
     P["items"] = pos_flags(P)
     return P
 
 
-def _zone_funnel(R, shop, shop_ids, matched_lines):
+def _zone_funnel(R, shop, shop_ids, matched_lines, member_lines=None):
+    member_lines = matched_lines if member_lines is None else member_lines
     pres, eps = R["presence"], R["episodes"]
     n = len(shop_ids)
     rows = []
@@ -218,8 +244,8 @@ def _zone_funnel(R, shop, shop_ids, matched_lines):
             continue
         reached = set(pres[pres.zone == name].track_id) & shop_ids
         stopped = set(eps[(eps.zone == name) & (eps.zone_type == "merchandise")].track_id) & shop_ids
-        zl = matched_lines[(matched_lines.zone == name) & matched_lines.track_id.isin(shop_ids)]
-        buyers = set(zl.track_id)
+        zl = matched_lines[(matched_lines.zone == name) & matched_lines.track_id.isin(shop_ids)]    # payer lines: revenue
+        buyers = set(member_lines[(member_lines.zone == name) & member_lines.track_id.isin(shop_ids)].track_id)   # a party buys together
         in_stop = buyers & stopped
         in_reach_only = (buyers & reached) - stopped
         missed = buyers - reached
@@ -239,16 +265,18 @@ def _zone_funnel(R, shop, shop_ids, matched_lines):
     return rows
 
 
-def _tracking_miss(R, shop_ids, matched_lines):
+def _tracking_miss(R, shop_ids, matched_lines, party_of=None):
     """Items bought from a zone by a shopper the tracker never saw in it. A data-quality check:
     zone edges drawn too tight, a camera blind spot, or items that sit in more than one place."""
     pres = R["presence"]
-    seen = set(zip(pres.track_id, pres.zone))
+    party_of = party_of or {}
+    pid = lambda t: party_of.get(int(t), int(t))
+    seen = {(pid(t), z) for t, z in zip(pres.track_id, pres.zone)}                  # seen if any member of the party was there
     ml = matched_lines[matched_lines.track_id.isin(shop_ids) & matched_lines.zone.isin(
         [n for n, z in R["zones"].items() if z[4] == "merchandise"])]
     if ml.empty:
         return dict(lines=0, not_seen=0, rate=None)
-    miss = sum((t, z) not in seen for t, z in zip(ml.track_id, ml.zone))
+    miss = sum((pid(t), z) not in seen for t, z in zip(ml.track_id, ml.zone))
     return dict(lines=int(len(ml)), not_seen=int(miss), rate=miss / len(ml))
 
 

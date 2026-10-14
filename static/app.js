@@ -173,6 +173,8 @@
   }
 
   async function getJSON(url) {
+    const rec = new URLSearchParams(location.search).get("rec");     // which recording(s) the page is showing
+    if (rec) url += (url.includes("?") ? "&" : "?") + "rec=" + encodeURIComponent(rec);
     const r = await fetch(url);
     if (!r.ok) throw new Error(url + " returned " + r.status);
     return r.json();

@@ -10,6 +10,10 @@
     <button class="reveal" type="button" data-reveal="password" aria-pressed="false">Show</button></div>
   <button class="btn primary big wide" type="submit">Sign in</button>
 </form>
+{% if google_enabled %}
+<div class="or">or</div>
+<a class="btn big wide" href="{{ url_for('auth_google', next=next) }}">Continue with Google</a>
+{% endif %}
 {% if demo_one_click %}
 <div class="or">or</div>
 <form method="post" action="{{ url_for('demo') }}"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="btn big wide" type="submit">Open the demo stores</button></form>

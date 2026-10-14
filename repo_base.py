@@ -42,6 +42,10 @@ def is_uuid(value):
 
 class Repo:
     mode = "abstract"
+    supports_oauth = False        # sign-in with an outside provider such as Google (Supabase only)
+
+    def oauth_start(self, provider, redirect_to, code_challenge): raise NotImplementedError
+    def oauth_finish(self, code, code_verifier): raise NotImplementedError
 
     # ---- auth
     def sign_up(self, email, password, name):          # -> {"session": dict|None, "needs_confirm": bool}
@@ -81,6 +85,8 @@ class Repo:
     def svc_get_store(self, store_id): raise NotImplementedError
     def svc_layout_by_key(self, store_id, key): raise NotImplementedError
     def svc_get_or_create_dataset(self, layout_id, label, source): raise NotImplementedError
+    def delete_dataset(self, dataset, store): raise NotImplementedError          # a recording, its tracks file and its sales file
+    def set_dataset_start(self, dataset, started_at): raise NotImplementedError   # ISO UTC text or None
     def save_pos(self, dataset, store, df): raise NotImplementedError            # sales lines: txn_id, t, zone, amount
     def load_pos(self, dataset, store): raise NotImplementedError                # -> DataFrame (empty when none)
 

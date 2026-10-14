@@ -19,7 +19,9 @@ log = logging.getLogger("agent")
 
 class Pipeline:
     def __init__(self, floor, detector, sink, detect_width=640, store_hz=config.SAMPLE_HZ, min_track_s=2.0,
-                 smooth=0.5, max_speed_mps=2.5, id_base=None):
+                 smooth=0.5, max_speed_mps=2.5, id_base=None, stitch=True, stitch_max_gap_s=config.STITCH_MAX_GAP_S,
+                 stitch_min_gap_s=config.STITCH_MIN_GAP_S, stitch_base_m=config.STITCH_BASE_M,
+                 stitch_speed_mps=config.STITCH_SPEED_MPS, stitch_edge_m=config.STITCH_EDGE_M):
         self.floor, self.det, self.sink = floor, detector, sink
         self.detect_width, self.store_dt = detect_width, 1.0 / store_hz
         self.min_track_s, self.smooth, self.max_speed = min_track_s, smooth, max_speed_mps
@@ -29,6 +31,11 @@ class Pipeline:
         self.tracker = None if detector.gives_ids else FloorTracker(new_id=self._next_id)
         self.state = {}
         self.frames = self.dets = self.dropped_off_floor = 0
+        # Track stitching: a new track that starts near where an established track was last seen, soon enough
+        # and close enough to be the same walker, continues that track instead of counting as a new person.
+        self.stitch, self.stitch_max_gap, self.stitch_min_gap = stitch, stitch_max_gap_s, stitch_min_gap_s
+        self.stitch_base, self.stitch_speed, self.stitch_edge = stitch_base_m, stitch_speed_mps, stitch_edge_m
+        self.alias, self.live, self.stitched, self._extra = {}, {}, 0, 0
 
     def _next_id(self):
         self._n += 1
@@ -64,8 +71,44 @@ class Pipeline:
         else:
             obs = [(self.id_base + int(i), x, y) for i, x, y in pts if i is not None]
         for tid, x, y in obs:
-            self._observe(tid, t, x, y)
+            self._observe(self._resolve(tid, t, x, y), t, x, y)
         self._purge(t)
+
+    def _resolve(self, raw, t, x, y):
+        """The id a detector track is stored under. Usually its own; a stitched track carries on an earlier id."""
+        c = self.alias.get(raw, raw if raw in self.state else None)
+        if c is not None and self.live.get(c, raw) == raw:
+            return c
+        if c is not None and raw not in self.alias:          # an id that was taken over has come back: a new track
+            self._extra += 1
+            fresh = self.id_base + 10 ** 6 + self._extra
+            self.alias[raw] = fresh
+            self.live[fresh] = raw
+            return fresh
+        self.alias.pop(raw, None)
+        c = self._find_stitch(t, x, y) if self.stitch else None
+        if c is None:
+            self.live[raw] = raw
+            return raw
+        self.alias[raw] = c
+        self.live[c] = raw
+        self.stitched += 1
+        return c
+
+    def _find_stitch(self, t, x, y):
+        """The established, currently unseen track this new track most plausibly continues, or None."""
+        best, best_d = None, None
+        fs = self.floor.floor_size
+        for c, s in self.state.items():
+            gap = t - s["seen"]
+            if not s["released"] or gap < self.stitch_min_gap or gap > self.stitch_max_gap:
+                continue
+            if fs and (min(s["sx"], s["sy"], fs[0] - s["sx"], fs[1] - s["sy"]) < self.stitch_edge):
+                continue                                      # last seen at the edge of the floor: it left
+            d = np.hypot(x - s["sx"], y - s["sy"])
+            if d <= self.stitch_base + self.stitch_speed * gap and (best_d is None or d < best_d):
+                best, best_d = c, d
+        return best
 
     def _observe(self, tid, t, x, y):
         s = self.state.get(tid)
@@ -98,8 +141,8 @@ class Pipeline:
 
     def close(self):
         self.sink.close()
-        log.info("%d frames, %d detections, %d off-floor dropped, %d points kept",
-                 self.frames, self.dets, self.dropped_off_floor, self.sink.count)
+        log.info("%d frames, %d detections, %d off-floor dropped, %d tracks stitched, %d points kept",
+                 self.frames, self.dets, self.dropped_off_floor, self.stitched, self.sink.count)
 
 
 def open_source(src):

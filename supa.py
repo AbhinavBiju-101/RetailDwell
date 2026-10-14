@@ -5,6 +5,7 @@ Uses `requests` only, so there is no extra SDK to install. Two kinds of calls:
   - as the service: the service-role key, used only on the server for ingest, seeding and files
 """
 import requests
+from urllib.parse import urlencode
 
 TIMEOUT = 15
 PAGE = 1000
@@ -47,6 +48,20 @@ class Supabase:
         r = self.http.post(f"{self.url}/auth/v1/token", params={"grant_type": "password"},
                            headers=self._auth_headers(), timeout=TIMEOUT,
                            json={"email": email, "password": password})
+        if not r.ok:
+            _raise(r)
+        return r.json()
+
+    def oauth_url(self, provider, redirect_to, code_challenge):
+        """Where to send the browser to sign in with an outside provider (PKCE). Supabase returns the person to
+        redirect_to with ?code=..., which exchange_pkce turns into a session."""
+        q = urlencode({"provider": provider, "redirect_to": redirect_to, "code_challenge": code_challenge,
+                       "code_challenge_method": "s256"})
+        return f"{self.url}/auth/v1/authorize?{q}"
+
+    def exchange_pkce(self, auth_code, code_verifier):
+        r = self.http.post(f"{self.url}/auth/v1/token", params={"grant_type": "pkce"}, headers=self._auth_headers(),
+                           timeout=TIMEOUT, json={"auth_code": auth_code, "code_verifier": code_verifier})
         if not r.ok:
             _raise(r)
         return r.json()

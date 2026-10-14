@@ -140,8 +140,13 @@ def _tracking(gt, est, m, hz):
         ids = g.est_id.tolist()
         switches += sum(a != b for a, b in zip(ids, ids[1:]))
         frags.append(len(set(ids)))
+    merged = 0                                  # an agent track that follows two different people (a wrong stitch)
+    for _eid, g in m.groupby("est_id"):
+        top = g.gt_id.value_counts()
+        if len(top) > 1 and top.iloc[1] >= 3 and top.iloc[1] / len(g) >= 0.2:
+            merged += 1
     person_min = len(gt_bins) / hz / 60.0
-    return dict(
+    return dict(merged_tracks=int(merged), 
         gt_people=int(gt.track_id.nunique()), est_tracks=int(est.track_id.nunique()),
         recall=len(hit) / max(1, len(gt_bins)), precision=len(m) / max(1, len(est)),
         median_err_m=float(m.err_m.median()) if len(m) else float("nan"),
@@ -256,7 +261,8 @@ def format_report(r):
          f"  {t['gt_people']} true people, {t['est_tracks']} agent tracks. Recall {t['recall']:.0%}, precision {t['precision']:.0%}.",
          f"  Position error: median {t['median_err_m']:.2f} m, 90th percentile {t['p90_err_m']:.2f} m (matches within {r['gate_m']:g} m).",
          f"  Identity switches {t['id_switches']} ({t['id_switches_per_person_min']:.2f} per person-minute); "
-         f"{t['tracks_per_found_person']:.2f} agent tracks per person found; {t['missed_people']} people missed; {t['ghost_tracks']} ghost tracks."]
+         f"{t['tracks_per_found_person']:.2f} agent tracks per person found; {t['missed_people']} people missed; {t['ghost_tracks']} ghost tracks; "
+         f"{t['merged_tracks']} tracks that merge two people."]
     if "zones" in r:
         z, p, s = r["zones"], r["person_zone"], r["as_shown"]
         L += ["ZONES", f"  A matched point lands in the same zone as the truth {z['point_agreement']:.0%} of the time."]

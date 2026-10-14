@@ -17,6 +17,9 @@
     </div>
     <label class="field-label" for="window_s">Queue window (seconds). Shorter windows suit busy tills, longer ones quiet stores.</label>
     <input class="text" id="window_s" name="window_s" type="number" min="60" max="1800" step="30" value="{{ store.window_s or 300 }}">
+    <label class="field-label" for="timezone">Store timezone, so recording times show as local clock time</label>
+    <input class="text" id="timezone" name="timezone" list="tzlist" value="{{ tz }}" autocomplete="off">
+    <datalist id="tzlist">{% for z in zone_names %}<option value="{{ z }}">{% endfor %}</datalist>
     <div><button class="btn primary" type="submit">Save store</button></div>
   </form>
 </section>
@@ -41,7 +44,8 @@
       <div class="row-main">
         <strong>{{ l.key }}: {{ l.label }}</strong>
         <span class="dim">{{ l.zones|length }} zones.
-          {% if l.dataset %}Recording "{{ l.dataset.label }}" has {{ '{:,}'.format(l.dataset.n_points or 0) }} points.{% else %}No recording yet.{% endif %}</span>
+          {% if l.dataset %}Recording "{{ l.dataset.label }}" has {{ '{:,}'.format(l.dataset.n_points or 0) }} points.
+            {% if starts[l.key].known %}Started {{ starts[l.key].start_label() }}.{% else %}Start time not set.{% endif %}{% else %}No recording yet.{% endif %}</span>
       </div>
       <div class="row-actions">
         <a class="btn" href="{{ url_for('zone_editor', ref=ref, key=l.key) }}">Edit zones</a>
@@ -53,9 +57,38 @@
             <input id="f-{{ l.key }}" name="file" type="file" accept=".csv,.gz,text/csv" required>
             <label class="field-label" for="lbl-{{ l.key }}">Recording name</label>
             <input class="text" id="lbl-{{ l.key }}" name="label" placeholder="Saturday 12 Oct">
+            <label class="field-label" for="st-{{ l.key }}">Recording started (optional, {{ tz }} time)</label>
+            <input class="text" id="st-{{ l.key }}" name="started_at" type="datetime-local">
             <button class="btn primary" type="submit">Upload</button>
           </form>
         </details>
+        {% if l.datasets|length %}
+        <details class="inline">
+          <summary class="btn">Recordings ({{ l.datasets|length }})</summary>
+          <ul class="plain">
+            {% for d in l.datasets %}
+            <li>{{ d.label }}: {{ '{:,}'.format(d.n_points or 0) }} points, {{ rec_starts[d.id] or 'no start time' }}
+              <form method="post" action="{{ url_for('delete_recording', ref=ref, dataset_id=d.id) }}" style="display: inline"
+                    onsubmit="return confirm('Delete this recording and its sales file? This cannot be undone.')">
+                <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                <button class="btn" type="submit">Delete</button>
+              </form></li>
+            {% endfor %}
+          </ul>
+          <p class="map-note">Choose "All days pooled" on any page to analyse them together. The newest 14 are used.</p>
+        </details>
+        {% endif %}
+        {% if l.dataset %}
+        <details class="inline">
+          <summary class="btn">Start time</summary>
+          <form method="post" action="{{ url_for('set_recording_start', ref=ref, key=l.key) }}" class="form">
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            <label class="field-label" for="ss-{{ l.key }}">When this recording started ({{ tz }} time). Leave empty to clear.</label>
+            <input class="text" id="ss-{{ l.key }}" name="started_at" type="datetime-local" value="{{ starts[l.key].local_input() }}">
+            <button class="btn primary" type="submit">Save</button>
+          </form>
+        </details>
+        {% endif %}
         {% if layouts|length > 1 %}
         <form method="post" action="{{ url_for('layout_delete', ref=ref, key=l.key) }}" onsubmit="return confirm('Delete layout {{ l.key }} and its recordings?')">
           <input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="btn danger" type="submit">Delete</button>
@@ -113,6 +146,30 @@
   -d '{"layout": "{{ layouts[0].key if layouts else 'A' }}", "recording": "Live",
        "points": [{"track_id": 1, "t": 0.0, "x": 2.1, "y": 3.4}]}'</pre>
   <p class="map-note">Each point has exactly four fields and a request holds up to 5,000 points. Anything else is rejected, never stored. Send t in seconds and x, y in metres from the bottom-left corner of the floor.</p>
+</section>
+
+<section class="block" id="detection" aria-labelledby="s-det">
+  <h2 id="s-det">Detection settings{% if changed %} <span class="dim">({{ changed }} changed from the defaults)</span>{% endif %}</h2>
+  <p>These rules decide who counts as staff, who counts as a party, how tracks are stitched and how sales are matched. They are set per store, so a before/after experiment always judges both layouts by the same rules. The defaults were set on simulated data: check them against your own footage before relying on the figures they shape.</p>
+  <form method="post" action="{{ url_for('settings_detection', ref=ref) }}" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    {% for gname, rows in detection %}
+    <details class="block" {% if rows|selectattr('is_default', 'equalto', false)|list %}open{% endif %}>
+      <summary><strong>{{ gname }}</strong>{% set n = rows|selectattr('is_default', 'equalto', false)|list|length %}{% if n %} <span class="dim">({{ n }} changed)</span>{% endif %}</summary>
+      {% for r in rows %}{% set s = r.spec %}
+      <label class="field-label" for="t_{{ s.key }}">{{ s.label }}{% if s.unit %} ({{ s.unit }}){% endif %}</label>
+      {% if s.kind == 'bool' %}
+      <select id="t_{{ s.key }}" name="t_{{ s.key }}"><option value="1" {% if r.value %}selected{% endif %}>On</option><option value="0" {% if not r.value %}selected{% endif %}>Off</option></select>
+      {% else %}
+      <input class="text" id="t_{{ s.key }}" name="t_{{ s.key }}" type="number" min="{{ s.lo }}" max="{{ s.hi }}" step="{{ 1 if s.kind == 'int' else 'any' }}" value="{{ r.value }}">
+      {% endif %}
+      <p class="map-note">{{ s.help }} Default {{ ('On' if s.default else 'Off') if s.kind == 'bool' else s.default }}{% if s.kind != 'bool' %}, allowed {{ s.lo }} to {{ s.hi }}{% endif %}. {{ s.applies }}</p>
+      {% endfor %}
+    </details>
+    {% endfor %}
+    <div><button class="btn primary" type="submit">Save detection settings</button>
+      <button class="btn" type="submit" name="reset" value="1" formnovalidate>Reset all to defaults</button></div>
+  </form>
 </section>
 
 <section class="block" id="sales" aria-labelledby="s-sales">

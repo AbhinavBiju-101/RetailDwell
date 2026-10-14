@@ -45,7 +45,7 @@
   <p>Each cell compares the share of shoppers who reached the zone in that window with the zone's own average over the whole recording. A busy window does not count as good for every zone, because the comparison is per shopper. Bold marks a gap that is unlikely to be chance. Windows are minutes since the recording started.</p>
   <div class="table-wrap">
     <table class="timing">
-      <thead><tr><th scope="col">Zone</th>{% for w in timing.windows %}<th scope="col">{{ w.label }} min<br><span class="dim">{{ w.shoppers }} shoppers</span></th>{% endfor %}</tr></thead>
+      <thead><tr><th scope="col">Zone</th>{% for w in timing.windows %}<th scope="col">{{ w.label }}<br><span class="dim">{{ w.shoppers }} shoppers</span></th>{% endfor %}</tr></thead>
       <tbody>
         {% for r in timing.rows %}
         <tr><th scope="row">{{ r.zone }}</th>
@@ -55,6 +55,7 @@
       </tbody>
     </table>
   </div>
+  {% if timing.note %}<p class="map-note">{{ timing.note }}</p>{% elif timing.clock %}<p class="map-note">Times are local ({{ timing.tz }}), from the recording's start time.</p>{% endif %}
   <p class="map-note">Hover a cell for the counts. Unusual windows are also listed on the Flags page.</p>
   {% endif %}
 </section>

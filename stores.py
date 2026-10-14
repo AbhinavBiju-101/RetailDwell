@@ -22,18 +22,18 @@ STORES = {
         name="Lakeside Grocery", kind="Grocery", w=20.0, h=12.0,
         blurb="Neighbourhood grocer. The weekly offers display was moved from the far wall to the main aisle.",
         entrance=(2.0, 0.8), aisle_y=4.0, register=(17.5, 2.0), queue=(14.8, 2.4),
-        service=(12, 28), servers=1, window_s=300, hero="Weekly offers",
+        service=(12, 28), servers=1, window_s=300, hero="Weekly offers", timezone="Asia/Kolkata",
         interest={"Produce": 0.55, "Snacks": 0.5, "Beverages": 0.35, "Household": 0.25, "Weekly offers": 0.7},
         directed_mult={"Weekly offers": 0.5}, mix=DEFAULT_MIX,
         loiter_box=(0.8, 1.2, 3.2, 2.8),
         layouts={
-            "A": dict(label="Before: offers on the far wall", visits=350, window_s=7200, seed=1,
+            "A": dict(label="Before: offers on the far wall", visits=350, window_s=7200, starts="2026-10-03T05:30:00+00:00", seed=1,
                       zones={
                           "Entrance": (0, 0, 4, 3, "entrance"), "Checkout": (15, 0, 20, 4, "checkout"),
                           "Produce": (0, 6, 5, 12, "merchandise"), "Snacks": (6, 8, 10, 12, "merchandise"),
                           "Beverages": (11, 8, 16, 12, "merchandise"), "Household": (16.5, 9.5, 20, 12, "merchandise"),
                           "Weekly offers": (16.5, 5, 20, 9, "merchandise")}),
-            "B": dict(label="After: offers beside the main aisle", visits=480, window_s=7200, seed=2,
+            "B": dict(label="After: offers beside the main aisle", visits=480, window_s=7200, starts="2026-10-10T05:30:00+00:00", seed=2,
                       zones={
                           "Entrance": (0, 0, 4, 3, "entrance"), "Checkout": (15, 0, 20, 4, "checkout"),
                           "Produce": (0, 6, 5, 12, "merchandise"), "Snacks": (6, 8, 10, 12, "merchandise"),
@@ -46,19 +46,19 @@ STORES = {
         name="Volt Electronics", kind="Electronics", w=26.0, h=14.0,
         blurb="Large-format electronics. The accessories rack moved next to the tills to catch impulse buys.",
         entrance=(2.0, 0.8), aisle_y=4.0, register=(22.5, 2.2), queue=(19.6, 2.6),
-        service=(15, 35), servers=1, window_s=300, hero="Accessories",
+        service=(15, 35), servers=1, window_s=300, hero="Accessories", timezone="Asia/Kolkata",
         interest={"Phones": 0.6, "Laptops": 0.45, "TV wall": 0.3, "Audio": 0.3, "Accessories": 0.55},
         directed_mult={}, buy_boost={"Accessories": 0.3}, vis=(0.7, 0.8),
         dwell={"TV wall": (30, 90), "Laptops": (15, 60)}, mix=dict(loiterer=0.06, directed=0.38),
         loiter_box=(0.8, 1.2, 3.2, 2.8),
         layouts={
-            "A": dict(label="Before: accessories at the back", visits=300, window_s=7200, seed=11,
+            "A": dict(label="Before: accessories at the back", visits=300, window_s=7200, starts="2026-10-03T05:30:00+00:00", seed=11,
                       zones={
                           "Entrance": (0, 0, 4, 3, "entrance"), "Checkout": (19, 0, 26, 4, "checkout"),
                           "Phones": (0, 6.5, 6, 12, "merchandise"), "Laptops": (7, 8.5, 13, 13, "merchandise"),
                           "TV wall": (14, 8, 20, 13.5, "merchandise"), "Audio": (21, 5.5, 26, 9, "merchandise"),
                           "Accessories": (21, 10, 26, 13.5, "merchandise")}),
-            "B": dict(label="After: accessories at the tills", visits=310, window_s=7200, seed=12,
+            "B": dict(label="After: accessories at the tills", visits=310, window_s=7200, starts="2026-10-10T05:30:00+00:00", seed=12,
                       zones={
                           "Entrance": (0, 0, 4, 3, "entrance"), "Checkout": (19, 0, 26, 4, "checkout"),
                           "Phones": (0, 6.5, 6, 12, "merchandise"), "Laptops": (7, 8.5, 13, 13, "merchandise"),
@@ -71,19 +71,19 @@ STORES = {
         name="Thread & Co.", kind="Apparel", w=24.0, h=16.0,
         blurb="Fashion boutique. The new-arrivals table moved to the entrance, which changes where people stop.",
         entrance=(2.0, 0.8), aisle_y=4.0, register=(20.5, 2.2), queue=(17.6, 2.6),
-        service=(18, 40), servers=1, window_s=300, hero="New arrivals",
+        service=(18, 40), servers=1, window_s=300, hero="New arrivals", timezone="Asia/Kolkata",
         interest={"New arrivals": 0.6, "Women": 0.55, "Men": 0.4, "Denim": 0.35, "Fitting rooms": 0.3},
         directed_mult={"New arrivals": 0.7, "Fitting rooms": 0.4}, stop_cap=(2, 4), vis=(0.6, 1.0),
         dwell={"Fitting rooms": (25, 70), "New arrivals": (12, 40)}, mix=dict(loiterer=0.07, directed=0.3),
         loiter_box=(0.8, 1.2, 3.2, 2.8),
         layouts={
-            "A": dict(label="Before: new arrivals at the back", visits=330, window_s=7200, seed=21,
+            "A": dict(label="Before: new arrivals at the back", visits=330, window_s=7200, starts="2026-10-03T05:30:00+00:00", seed=21,
                       zones={
                           "Entrance": (0, 0, 4, 3, "entrance"), "Checkout": (17, 0, 24, 4, "checkout"),
                           "Women": (0, 6, 8, 15, "merchandise"), "Men": (9, 6, 16, 11.5, "merchandise"),
                           "Denim": (17, 9.5, 24, 15, "merchandise"), "Fitting rooms": (17, 5, 24, 8.5, "merchandise"),
                           "New arrivals": (9, 12.3, 16, 15.5, "merchandise")}),
-            "B": dict(label="After: new arrivals at the entrance", visits=345, window_s=7200, seed=22,
+            "B": dict(label="After: new arrivals at the entrance", visits=345, window_s=7200, starts="2026-10-10T05:30:00+00:00", seed=22,
                       zones={
                           "Entrance": (0, 0, 4, 3, "entrance"), "Checkout": (17, 0, 24, 4, "checkout"),
                           "Women": (0, 6, 8, 15, "merchandise"), "Men": (9, 6, 16, 11.5, "merchandise"),
@@ -96,18 +96,18 @@ STORES = {
         name="Corner Pharmacy", kind="Pharmacy", w=14.0, h=10.0,
         blurb="Small pharmacy. Same floor plan, but a second pickup counter was opened to shorten the queue.",
         entrance=(1.5, 0.8), aisle_y=3.6, register=(11.6, 1.7), queue=(8.6, 2.2),
-        service=(35, 60), servers=1, window_s=600, hero="Everyday health", buy_rates=(0.9, 0.55),
+        service=(35, 60), servers=1, window_s=600, hero="Everyday health", timezone="Asia/Kolkata", buy_rates=(0.9, 0.55),
         interest={"Everyday health": 0.5, "Wellness": 0.4, "Baby & care": 0.3},
         directed_mult={}, mix=dict(loiterer=0.15, directed=0.45),
         loiter_box=(0.4, 3.9, 3.0, 5.2),
         layouts={
-            "A": dict(label="Before: one pickup counter", visits=220, window_s=7200, seed=31, servers=1,
+            "A": dict(label="Before: one pickup counter", visits=220, window_s=7200, starts="2026-10-03T05:30:00+00:00", seed=31, servers=1,
                       zones={
                           "Entrance": (0, 0, 3, 2.5, "entrance"), "Checkout": (9, 0, 14, 3.2, "checkout"),
                           "Waiting seats": (0, 3.8, 3.2, 5.4, "seating"),
                           "Everyday health": (0, 6, 5, 9.5, "merchandise"), "Wellness": (5.6, 6.2, 10, 9.5, "merchandise"),
                           "Baby & care": (10.6, 4.6, 14, 9.5, "merchandise")}),
-            "B": dict(label="After: two pickup counters", visits=220, window_s=7200, seed=31, servers=2,
+            "B": dict(label="After: two pickup counters", visits=220, window_s=7200, starts="2026-10-10T05:30:00+00:00", seed=31, servers=2,
                       zones={
                           "Entrance": (0, 0, 3, 2.5, "entrance"), "Checkout": (9, 0, 14, 3.2, "checkout"),
                           "Waiting seats": (0, 3.8, 3.2, 5.4, "seating"),
@@ -117,13 +117,18 @@ STORES = {
     ),
 }
 
-ZONE_TYPES = ["merchandise", "checkout", "entrance", "seating"]
+ZONE_TYPES = ["merchandise", "checkout", "entrance", "seating", "staff"]
 
 # Mock sales, one config per demo store (prices in rupees). A shopper who stopped at a zone buys from it with
 # probability take[zone] (directed shoppers are pulled up towards 1; a (explorer, directed) pair sets both). `extra` items are bought regardless of
 # where the shopper went (here: prescriptions, which are not a floor zone). The POS clock runs skew_s ahead of
 # the camera clock, with noise_s of jitter, and a few sales (untracked) have no matching track at all.
 # The simulator sets all of this, so the numbers show the method recovers a known pattern, not real behaviour.
+# Extra people for the demo, added after the shoppers are simulated (their tracks are not touched): party_rate is the
+# share of shoppers who arrive with 1 or 2 companions who walk with them and do not pay; staff is the number of staff
+# on the floor all day (a cashier behind the register and a stocker who patrols and pauses at the shelves).
+CROWD = {"corner-pharmacy": dict(party_rate=0.22, staff=2)}
+
 DEFAULT_TAKE = 0.55
 BASKETS = {
     "lakeside-grocery": dict(

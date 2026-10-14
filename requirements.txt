@@ -4,3 +4,5 @@ numpy
 pandas
 requests
 python-dotenv
+scipy
+tzdata

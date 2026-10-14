@@ -4,6 +4,21 @@
 <p class="lede">{{ layout.label }}: {{ kpi.visits }} visits, of which {{ kpi.shoppers }} were shoppers.
   {{ kpi.busiest }} reaches {{ '%.0f'|format(kpi.busiest_share * 100) }}% of shoppers; {{ kpi.quietest }} reaches {{ '%.0f'|format(kpi.quietest_share * 100) }}%.</p>
 
+{% if crowd.cameras %}
+<p class="map-note" style="max-width: 70ch; margin-bottom: 1rem">
+  {% if crowd.cameras.enabled %}{{ crowd.cameras.n }} cameras are covering this floor. {{ crowd.cameras.tracks_in }} camera tracks became {{ crowd.cameras.tracks_out }} people:
+    {{ crowd.cameras.merges }} duplicates seen by two cameras were merged and {{ crowd.cameras.handoffs }} hand-overs between cameras were joined.
+    {% if crowd.cameras.err is not none %}Where they overlap, the cameras place the same person {{ '%.2f'|format(crowd.cameras.err) }} m apart on average.
+      {% if crowd.cameras.close %}That is close to the {{ crowd.cameras.limit }} m limit, so some duplicates may be missed: check the cameras' calibration against each other.{% endif %}{% endif %}
+  {% else %}{{ crowd.cameras.n }} cameras are sending data but merging is switched off in Settings, so people seen by more than one camera are counted more than once.{% endif %}
+</p>
+{% endif %}
+{% if crowd.n_staff or crowd.n_parties %}
+<p class="map-note" style="max-width: 70ch; margin-bottom: 1rem">
+  {% if crowd.n_staff %}{{ crowd.n_staff }} track{{ '' if crowd.n_staff == 1 else 's' }} left out as staff ({{ crowd.staff|join('; ') }}). They are not counted in any figure here.{% endif %}
+  {% if crowd.n_parties %}{{ crowd.in_parties }} people moved in {{ crowd.n_parties }} part{{ 'y' if crowd.n_parties == 1 else 'ies' }} (families or friends who arrive, walk and leave together). They are counted as separate visits here, and as one buyer on the Revenue page.{% endif %}
+</p>
+{% endif %}
 <dl class="figures">
   <div class="figure"><dd>{{ kpi.visits }}</dd><dt>Visits</dt></div>
   <div class="figure"><dd>{{ '%.1f'|format(kpi.avg_visit_min) }} <small>min</small></dd><dt>Average visit</dt></div>

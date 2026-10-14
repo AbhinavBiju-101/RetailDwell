@@ -144,6 +144,28 @@ def points_from_json(points, w, h):
 
 
 # ---- sales (POS): exactly txn_id, t, zone, amount. No card, loyalty, cashier or customer columns exist.
+def _pos_times(df, clock, report):
+    """Turn the t column into seconds since the recording started. Accepts those seconds as they are, or real
+    timestamps (local, with an offset, or epoch) when the recording has a start time."""
+    from clock import Clock
+    t = df["t"].astype(str).str.strip()
+    ok = df["t"].notna() & (t != "") & (t.str.lower() != "nan")
+    if ok.mean() < 0.9:
+        raise ValidationError("More than 10% of rows have no time. Check the t column.")
+    df, t = df[ok].copy(), t[ok]
+    try:
+        secs = (clock or Clock()).seconds_since_start(t.tolist())
+    except ValueError as e:
+        raise ValidationError(str(e))
+    df["t"] = secs
+    early = df["t"] < -120
+    if report is not None:
+        report["dropped_before_start"] = int(early.sum())
+    df = df[~early].copy()
+    df.loc[df["t"] < 0, "t"] = 0.0
+    return df
+
+
 def clean_pos_frame(df):
     df = df[POS_COLS].copy()
     df["txn_id"] = df["txn_id"].astype(str).str.strip()
@@ -170,7 +192,7 @@ def clean_pos_frame(df):
     return df.sort_values(["t", "txn_id", "zone"]).reset_index(drop=True)
 
 
-def pos_from_csv(data):
+def pos_from_csv(data, clock=None, report=None):
     """Parse an uploaded sales CSV (bytes). Keeps only txn_id, t, zone, amount; other columns are dropped."""
     if len(data) > MAX_UPLOAD_BYTES:
         raise ValidationError("That file is larger than 50 MB.")
@@ -184,10 +206,10 @@ def pos_from_csv(data):
         raise ValidationError("The CSV needs the columns txn_id, t, zone and amount. Missing: " + ", ".join(missing) + ".")
     if len(df) > POS_MAX_LINES:
         raise ValidationError(f"That file has more than {POS_MAX_LINES:,} rows.")
-    return clean_pos_frame(df[POS_COLS])
+    return clean_pos_frame(_pos_times(df[POS_COLS], clock, report))
 
 
-def pos_from_json(rows):
+def pos_from_json(rows, clock=None, report=None):
     """Validate a batch of sales lines from the ingest API. Extra fields are rejected."""
     if not isinstance(rows, list) or not rows:
         raise ValidationError("sales must be a non-empty list.")
@@ -198,7 +220,7 @@ def pos_from_json(rows):
         if not isinstance(r, dict) or set(r) != set(POS_COLS):
             raise ValidationError("Each sales line must have exactly txn_id, t, zone and amount. Nothing else is accepted.")
         out.append([r[c] for c in POS_COLS])
-    return clean_pos_frame(pd.DataFrame(out, columns=POS_COLS))
+    return clean_pos_frame(_pos_times(pd.DataFrame(out, columns=POS_COLS), clock, report))
 
 
 # ---- API keys: only a hash is stored; the plain key is shown once

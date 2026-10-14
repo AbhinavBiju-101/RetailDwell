@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from config import SAMPLE_HZ
-from stores import BASKETS, DEFAULT_MIX, DEFAULT_TAKE, STORES, main_path
+from stores import BASKETS, CROWD, DEFAULT_MIX, DEFAULT_TAKE, STORES, main_path
 
 DT = 1.0 / SAMPLE_HZ
 
@@ -246,12 +246,96 @@ def baskets(store_key, layout_key, pos_df):
             pd.DataFrame(truth, columns=["txn_id", "track_id"]))
 
 
+def crowd(store_key, layout_key, df):
+    """Adds companions and staff to a simulated layout. Returns (all_tracks, truth) where truth is
+    dict(parties={companion_id: leader_id}, staff=[ids], originals=[ids]). The original shoppers are untouched; a store
+    with no CROWD entry gets the tracks back unchanged. Own random stream, so nothing else in the demo moves."""
+    cfg = CROWD.get(store_key)
+    originals = sorted(int(t) for t in df.track_id.unique())
+    if not cfg:
+        return df, dict(parties={}, staff=[], originals=originals)
+    spec = STORES[store_key]
+    lay = spec["layouts"][layout_key]
+    rng = np.random.default_rng(lay["seed"] * 104729 + 7)
+    W, H, win = spec["w"], spec["h"], lay["window_s"]
+    nid, parts, parties, staff = int(df.track_id.max()), [], {}, []
+    for lid in originals:
+        if rng.random() >= cfg["party_rate"]:
+            continue
+        g = df[df.track_id == lid]
+        tt = g.t.to_numpy()
+        for _ in range(1 + int(rng.random() < 0.2)):
+            nid += 1
+            mag, ang, spin = rng.uniform(0.6, 1.1), rng.uniform(0, 2 * np.pi), rng.uniform(-0.3, 0.3)
+            x = g.x.to_numpy() + mag * np.cos(ang + spin * (tt - tt[0])) + rng.normal(0, 0.08, len(tt))
+            y = g.y.to_numpy() + mag * np.sin(ang + spin * (tt - tt[0])) + rng.normal(0, 0.08, len(tt))
+            parts.append(pd.DataFrame(dict(track_id=nid, t=tt, x=np.clip(x, 0.2, W - 0.2), y=np.clip(y, 0.2, H - 0.2))))
+            parties[nid] = lid
+    times = np.arange(0, win, 0.5)
+    till = next((z for z in lay["zones"].values() if z[4] == "checkout"), None)
+    if cfg.get("staff", 0) >= 1 and till:                       # the cashier: behind the register all day
+        nid += 1
+        staff.append(nid)
+        cx, cy = (till[0] + till[2]) / 2, till[3] - 0.4
+        parts.append(pd.DataFrame(dict(track_id=nid, t=times, x=cx + rng.normal(0, 0.05, len(times)), y=cy + rng.normal(0, 0.05, len(times)))))
+    merch = [z for z in lay["zones"].values() if z[4] == "merchandise"]
+    if cfg.get("staff", 0) >= 2 and merch:                      # the stocker: walks between shelves, pausing at each
+        nid += 1
+        staff.append(nid)
+        x, y, t, pts, k = (merch[0][0] + merch[0][2]) / 2, (merch[0][1] + merch[0][3]) / 2, 0.0, [], 0
+        while t < win:
+            z = merch[k % len(merch)]
+            gx, gy = rng.uniform(z[0] + 0.3, z[2] - 0.3), rng.uniform(z[1] + 0.3, z[3] - 0.3)
+            steps = max(int(np.hypot(gx - x, gy - y) / 0.9 / 0.5), 1)
+            for i in range(1, steps + 1):                       # walk
+                pts.append((t, x + (gx - x) * i / steps, y + (gy - y) * i / steps))
+                t += 0.5
+            x, y = gx, gy
+            for _ in range(int(rng.uniform(20, 60) / 0.5)):     # pause
+                pts.append((t, x + rng.normal(0, 0.04), y + rng.normal(0, 0.04)))
+                t += 0.5
+            k += 1
+        a = np.array([p for p in pts if p[0] < win])
+        parts.append(pd.DataFrame(dict(track_id=nid, t=a[:, 0], x=a[:, 1], y=a[:, 2])))
+    out = pd.concat([df] + parts, ignore_index=True) if parts else df
+    return out, dict(parties=parties, staff=staff, originals=originals)
+
+
+def cameras(store_key, people, n_cams=2, overlap_m=3.0, noise_m=0.15, bias_m=0.15, dropout=0.08, seed=5):
+    """What several cameras would report for people who walked the simulated floor, as an agent per camera would send it.
+
+    The floor is split along its length into n_cams views that overlap by overlap_m. Each camera sees a person only inside its
+    view, places them with its own constant calibration error (bias_m) plus noise_m of jitter, misses a share of frames
+    (dropout), and gives a new track id whenever it loses the person for more than 1.5 s or the person re-enters its view.
+    Ids carry the camera number as agents do. Returns (tracks, truth) where truth maps each camera track id to the person."""
+    from fusion import tag_camera
+    spec = STORES[store_key]
+    W = spec["w"]
+    rng = np.random.default_rng(seed)
+    bias = rng.normal(0, bias_m, (n_cams, 2))
+    rows, truth, counter = [], {}, 0
+    for pid, g in people.sort_values(["track_id", "t"]).groupby("track_id"):
+        t, x, y = g.t.to_numpy(), g.x.to_numpy(), g.y.to_numpy()
+        for c in range(n_cams):
+            lo, hi = c * W / n_cams - overlap_m / 2, (c + 1) * W / n_cams + overlap_m / 2
+            seen = (x >= lo) & (x <= hi) & (rng.random(len(t)) >= dropout)
+            cur, last = None, -9.0
+            for i in np.where(seen)[0]:
+                if cur is None or t[i] - last > 1.5:
+                    counter += 1
+                    cur = tag_camera(counter, c)
+                    truth[cur] = int(pid)
+                rows.append((cur, t[i], x[i] + bias[c, 0] + rng.normal(0, noise_m), y[i] + bias[c, 1] + rng.normal(0, noise_m)))
+                last = t[i]
+    return pd.DataFrame(rows, columns=["track_id", "t", "x", "y"]), truth
+
+
 def generate_with_sales(store_key):
-    """Like generate(), plus mock sales: {layout_key: (tracks_df, lines_df, truth_df)}."""
+    """Like generate(), plus mock sales and any companions and staff: {layout_key: (tracks_df, lines_df, truth_df)}."""
     out = {}
     for k, (df, pos_df) in generate(store_key).items():
         lines, truth = baskets(store_key, k, pos_df)
-        out[k] = (df, lines, truth)
+        out[k] = (crowd(store_key, k, df)[0], lines, truth)
     return out
 
 

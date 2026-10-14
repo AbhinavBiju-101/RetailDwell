@@ -1,0 +1,43 @@
+{% extends "base_app.html" %}
+{% block content %}
+<h1>Brief</h1>
+<p class="lede">A short summary of {{ layout.label }} for the store manager, written from the figures in this app and nothing else.
+  {% if result.source == 'gemini' %}Written by Gemini ({{ result.model }}) from a summary of the figures.{% else %}This is the standard summary, written by the app.{% endif %}</p>
+
+{% if result.warning %}
+<p class="flash bad" role="alert" style="max-width: 62ch">{{ result.warning }}</p>
+{% elif result.note %}
+<p class="flash" style="max-width: 62ch">{{ result.note }}</p>
+{% endif %}
+
+<section class="block" style="max-width: 62ch" aria-label="Brief">
+  {% for s in result.sections %}
+  <h2>{{ s.title }}</h2>
+  <ul class="plain">{% for i in s['items'] %}<li>{{ i }}</li>{% endfor %}</ul>
+  {% endfor %}
+</section>
+
+{% if can_edit and ai_available %}
+<form method="post" action="{{ url_for('brief_write', ref=ref) }}" style="margin: 1.25rem 0 .5rem">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <input type="hidden" name="layout" value="{{ layout.key }}">
+  {% if result.source == 'gemini' %}<input type="hidden" name="again" value="1">{% endif %}
+  <button class="btn primary" type="submit" {% if remaining < 1 %}disabled{% endif %}>{{ 'Write it again with Gemini' if result.source == 'gemini' else 'Write it with Gemini' }}</button>
+  <span class="dim">{{ remaining }} of {{ limit }} left today for this store.</span>
+</form>
+<p class="map-note" style="max-width: 62ch">Gemini receives only the summary figures listed below: counts, percentages, zone names and the findings. It never receives tracks, sales lines or anything about individuals. It is told to use only these figures, and text that contains figures that are not in them is thrown away.</p>
+{% elif is_demo %}
+<p class="map-note" style="max-width: 62ch">Gemini writing is switched off for the demo stores.</p>
+{% endif %}
+
+<details class="block" style="max-width: 62ch">
+  <summary>What this is based on</summary>
+  <table>
+    <thead><tr><th scope="col">Zone</th><th scope="col">Reaches</th><th scope="col">Of those, stop</th><th scope="col">Average stop</th></tr></thead>
+    <tbody>{% for z in facts.zones %}<tr><th scope="row">{{ z.zone }}</th><td>{{ z.reached_pct }}%</td><td>{{ z.of_those_who_reach_stop_pct }}%</td><td>{{ z.average_stop_seconds }} s</td></tr>{% endfor %}</tbody>
+  </table>
+  <p class="map-note">{{ facts.visits }} visits, {{ facts.shoppers }} shoppers{% if facts.revenue %}, {{ facts.revenue.sales }} sales{% endif %}.
+    {% if facts.findings %}{{ facts.findings|length }} finding{{ '' if facts.findings|length == 1 else 's' }} from the Flags page{% if facts.revenue %} and the Revenue page{% endif %} are included.{% endif %}
+    {% if facts.layout_experiment %} The before and after result for {{ facts.layout_experiment.zone }} is included.{% endif %}</p>
+</details>
+{% endblock %}

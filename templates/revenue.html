@@ -25,10 +25,11 @@
 <dl class="figures">
   <div class="figure"><dd>{{ k.revenue_per_shopper|money }}</dd><dt>Revenue per shopper</dt></div>
   <div class="figure"><dd>{% if k.conversion is not none %}{{ '%.0f'|format(k.conversion * 100) }}<small>%</small>{% else %}n/a{% endif %}</dd><dt>Shoppers with a matched sale</dt></div>
+  {% if k.n_parties %}<div class="figure"><dd>{{ k.revenue_per_party|money }}</dd><dt>Revenue per party</dt></div>{% endif %}
   <div class="figure"><dd>{{ k.avg_basket|money }}</dd><dt>Average basket</dt></div>
   <div class="figure"><dd>{% if k.coverage is not none %}{{ '%.0f'|format(k.coverage * 100) }}<small>%</small>{% else %}n/a{% endif %}</dd><dt>Of revenue tied to a shopper</dt></div>
 </dl>
-<p class="map-note" style="margin: -1rem 0 1.75rem; max-width: 70ch">Shoppers are everyone except loiterers and waiters, and shoppers whose sale was ambiguous are left out of these averages ({{ k.n_unknown }} of {{ k.n_shoppers }}). Someone who paid but could not be matched counts as no sale, so the share with a matched sale is a floor, not an exact conversion rate.</p>
+<p class="map-note" style="margin: -1rem 0 1.75rem; max-width: 70ch">Shoppers are everyone except loiterers and waiters, and shoppers whose sale was ambiguous are left out of these averages ({{ k.n_unknown }} of {{ k.n_shoppers }}). {% if k.n_parties %}People who arrived together ({{ k.in_parties }} people in {{ k.n_parties }} parties) count as one buyer, so a companion of someone who paid is not a missed sale; revenue per shopper is still per person, and revenue per party is per buying unit. {% endif %}Someone who paid but could not be matched counts as no sale, so the share with a matched sale is a floor, not an exact conversion rate.</p>
 
 {% include "_heatcontrols.html" %}
 <div class="split">

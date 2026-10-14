@@ -8,7 +8,9 @@ Cameras post anonymous positions to POST /api/ingest/v1/tracks with a store API 
 Run:  python app.py                     (local SQLite store if no Supabase keys are set)
 Prod: gunicorn -w 1 --threads 4 "app:create_app()"
 """
+import base64
 import functools
+import hashlib
 import hmac
 import json
 import logging
@@ -22,13 +24,19 @@ from urllib.parse import urlencode
 
 import numpy as np
 from dotenv import load_dotenv
-from flask import (Flask, abort, flash, g, jsonify, make_response, redirect, render_template,
+from flask import (Flask, abort, has_request_context, flash, g, jsonify, make_response, redirect, render_template,
                    request, session, url_for)
 
 load_dotenv()
 
 import analytics as an  # noqa: E402
 import pos as sales  # noqa: E402
+import clock as wallclock  # noqa: E402
+import brief as brief_mod  # noqa: E402
+import thresholds  # noqa: E402
+import pooling  # noqa: E402
+import fusion  # noqa: E402
+from config import TIME_WINDOW_S  # noqa: E402
 import validation as val  # noqa: E402
 from repo import get_repo  # noqa: E402
 from repo_base import AuthError, Forbidden, NotFound, RepoError, store_ref  # noqa: E402
@@ -41,7 +49,7 @@ log = logging.getLogger("dwell")
 LOITERER = an.LOITERER
 SEGMENTS = ["directed", "exploratory", LOITERER, "pass-through"]
 NAV = [("overview", "Overview"), ("experiment", "Experiment"), ("zones", "Zones"),
-       ("revenue", "Revenue"), ("flags", "Flags"), ("journeys", "Journeys")]
+       ("revenue", "Revenue"), ("flags", "Flags"), ("journeys", "Journeys"), ("brief", "Brief")]
 CURRENCY = os.environ.get("CURRENCY_SYMBOL", "\u20b9")
 TONE = {"Bottleneck": "bad", "Dead zone": "bad", "Visibility problem": "warn",
         "Quieter than usual": "warn", "Busier than usual": "info",
@@ -68,7 +76,35 @@ def clean_json(o):
     return o
 
 
-def timing_view(tb):
+def fusion_summary(reps):
+    """One report for several recordings: counts add up; the calibration gap is the median across days."""
+    errs = [r["overlap_error_m"] for r in reps if r["overlap_error_m"] is not None]
+    return dict(cameras=max(r["cameras"] for r in reps), enabled=all(r["enabled"] for r in reps),
+                tracks_in=sum(r["tracks_in"] for r in reps), tracks_out=sum(r["tracks_out"] for r in reps),
+                overlap_merges=sum(r["overlap_merges"] for r in reps), handoffs=sum(r["handoffs"] for r in reps),
+                overlap_pairs=sum(r["overlap_pairs"] for r in reps), overlap_error_m=float(np.median(errs)) if errs else None)
+
+
+def checkout_where(R):
+    """How the checkout flag says when: clock time when it is known, otherwise minutes since the recording started."""
+    P, clk = R.get("pooled"), R.get("clock")
+    if P and P.get("clock"):
+        return lambda m: f"{pooling.hhmm(m)} (on one of {P['n']} days)"
+    if P:
+        return lambda m: f"a time on one of {P['n']} days"
+    if clk and clk.known:
+        return lambda m: clk.local(m).strftime("%H:%M")
+    return None
+
+
+def span_fn(R):
+    P, clk = R.get("pooled"), R.get("clock")
+    if P and P.get("clock"):
+        return lambda a, b: f"{pooling.hhmm(a)} and {pooling.hhmm(b)}, pooled over {P['n']} days"
+    return clk.span if clk else None
+
+
+def timing_view(tb, clk=None, pooled=None):
     """Zone x window grid for the zones page: text and flag per cell, so colour is never the only signal."""
     if not tb["windows"]:
         return dict(reason=tb["reason"], windows=[], rows=[])
@@ -83,8 +119,21 @@ def timing_view(tb):
             cells.append(dict(text="-" if pct is None else f"{pct:+d}%", flag=c["flag"],
                               title=f"{c['visitors']} reached it, about {c['expected']:.0f} expected from {c['shoppers']} shoppers"))
         rows.append(dict(zone=z, cells=cells))
-    return dict(reason=None, windows=[dict(label=f"{w['start_min']} to {w['end_min']}", shoppers=w["shoppers"])
-                                      for w in tb["windows"]], rows=rows)
+    if pooled and pooled.get("clock"):
+        return dict(reason=None, clock=True, tz=None, note=f"Hours of the day, pooled over {pooled['n']} days: each column gathers the shoppers from every day in that hour.",
+                    windows=[dict(label=f"{pooling.hhmm(w['start_min'])} to {pooling.hhmm(w['end_min'])}", shoppers=w["shoppers"])
+                             for w in tb["windows"]], rows=rows)
+    known = bool(clk and clk.known)
+    return dict(reason=None, clock=known, note=None, tz=clk.tz_name if known else None,
+                windows=[dict(label=(clk.window(w["start_min"], w["end_min"]) if known else f"{w['start_min']} to {w['end_min']} min"),
+                              shoppers=w["shoppers"]) for w in tb["windows"]], rows=rows)
+
+
+def parse_start_or_400(text, store):
+    try:
+        return wallclock.iso(wallclock.parse_start(text, store.get("timezone") or wallclock.DEFAULT_TZ))
+    except ValueError as e:
+        raise val.ValidationError(str(e))
 
 
 def money(v, digits=0):
@@ -110,8 +159,8 @@ def has_merch(layout):
 def findings(R):
     out = [dict(kind=f.kind, tone=TONE.get(f.kind, "info"), text=f.message)
            for _, f in R["flags"].iterrows() if f.kind != "Healthy"]
-    out += [dict(kind=f["kind"], tone=TONE[f["kind"]], text=f["message"]) for f in an.timing_flags(R["timing"])]
-    chk = an.flag_checkout(R["checkout"])
+    out += [dict(kind=f["kind"], tone=TONE[f["kind"]], text=f["message"]) for f in an.timing_flags(R["timing"], span=span_fn(R))]
+    chk = an.flag_checkout(R["checkout"], where=checkout_where(R))
     if chk:
         out.append(dict(kind=chk["kind"], tone=TONE[chk["kind"]], text=chk["message"]))
     out += [dict(kind=f["kind"], tone=TONE.get(f["kind"], "info"), text=f["text"])
@@ -168,7 +217,7 @@ class Throttle:
             return True
 
 
-def create_app(repo=None):
+def create_app(repo=None, brief_service=None):
     app = Flask(__name__)
     secret = os.environ.get("SECRET_KEY", "").strip()
     if not secret:
@@ -188,6 +237,7 @@ def create_app(repo=None):
     analyses, comparisons = Cache(24), Cache(256)
     login_throttle = Throttle(10, 600)
     pos_lock = threading.Lock()
+    brief_svc = brief_service or brief_mod.BriefService()
     app.jinja_env.filters["money"] = money
     demo_email = os.environ.get("DEMO_EMAIL", "").strip()
     demo_password = os.environ.get("DEMO_PASSWORD", "")
@@ -303,7 +353,7 @@ def create_app(repo=None):
         return dict(brand=BRAND, tagline=TAGLINE, user=g.get("user"), csrf_token=csrf_token, nav=NAV, endpoint=request.endpoint,
                     can_edit=bool(g.get("user")) and g.user["role"] != "demo",
                     demo_one_click=bool(os.environ.get("DEMO_ONE_CLICK") == "1" and demo_email and demo_password),
-                    backend=repo.mode)
+                    google_enabled=google_enabled(), backend=repo.mode)
 
     # ------------------------------------------------------------------ store context
     def load_ctx(ref, need_edit=False, sess=None):
@@ -315,11 +365,13 @@ def create_app(repo=None):
             abort(403, "You cannot change this store.")
         layouts = repo.list_layouts(sess, store["id"])
         datasets = repo.list_datasets(sess, [l["id"] for l in layouts])
-        latest = {}
+        latest, every = {}, {}
         for d in datasets:                      # newest first
             latest.setdefault(d["layout_id"], d)
+            every.setdefault(d["layout_id"], []).append(d)
         for l in layouts:
             l["dataset"] = latest.get(l["id"])
+            l["datasets"] = every.get(l["id"], [])
             l["ready"] = bool(l["dataset"] and l["dataset"]["n_points"] and has_merch(l))
         return store, layouts
 
@@ -329,21 +381,68 @@ def create_app(repo=None):
                 return l
         return None
 
-    def analyse(store, layout):
-        ds = layout["dataset"]
+    def scope_of(layout):
+        """Which recordings to analyse: 'latest', 'all' (pooled), or one recording's id. From ?rec=."""
+        if not has_request_context():
+            return "latest"
+        rec = request.args.get("rec") or "latest"
+        if rec == "all":
+            return "all"
+        if rec != "latest" and any(d["id"] == rec and d["n_points"] for d in layout.get("datasets", [])):
+            return rec
+        return "latest"
+
+    def exp_scope():
+        return "all" if has_request_context() and request.args.get("rec") == "all" else "latest"
+
+    def analyse(store, layout, scope=None):
+        scope = scope or scope_of(layout)
+        ready = [d for d in layout.get("datasets", []) if d["n_points"]]
+        pooled_ds = list(reversed(ready[:pooling.MAX_POOL])) if scope == "all" and len(ready) >= 2 else None   # oldest first
+        if pooled_ds:
+            ds_key = tuple((d["id"], d["n_points"], d.get("updated_at")) for d in pooled_ds)
+        else:
+            ds = next((d for d in ready if d["id"] == scope), None) or layout["dataset"]
+            ds_key = (ds["id"], ds["n_points"], ds.get("updated_at"))
         zones = layout["zones"]
         window = int(store.get("window_s") or 300)
         zkey = hash(json.dumps(zones, sort_keys=True))
-        key = (ds["id"], ds["n_points"], ds.get("updated_at"), zkey, store["width_m"], store["height_m"], window)
+        params = thresholds.resolve(store.get("settings"))
+        key = (ds_key, zkey, store["width_m"], store["height_m"], window, json.dumps(params, sort_keys=True), store.get("timezone"))
+        zdict = {n: list(z) for n, z in zones.items()}
 
         def build():
-            R = an.analyse_layout(repo.load_tracks(ds, store), {n: list(z) for n, z in zones.items()},
-                                  float(store["width_m"]), float(store["height_m"]), window)
+            if pooled_ds:
+                recs, freps = [], []
+                for d in pooled_ds:
+                    try:
+                        lines = repo.load_pos(d, store)
+                    except Exception:
+                        log.exception("Sales data could not be read for dataset %s", d["id"])
+                        lines = None
+                    tr, frep = fusion.fuse(repo.load_tracks(d, store), params)        # per recording, before the days are pooled
+                    freps.append(frep)
+                    recs.append(dict(label=d["label"], tracks=tr, lines=lines, started_at=d.get("started_at")))
+                P = pooling.pool(recs, TIME_WINDOW_S, store.get("timezone"))
+                R = an.analyse_layout(P["tracks"], zdict, float(store["width_m"]), float(store["height_m"]), window, params=params,
+                                      pooled=dict(n=P["n"], slot_fn=P["slot_fn"], minute_of_day_fn=P["minute_of_day_fn"]))
+                R["pooled"] = dict(n=P["n"], labels=P["labels"], undated=P["undated"], clock=P["slot_fn"] is not None,
+                                   capped=len(ready) > pooling.MAX_POOL, of=len(ready))
+                R["clock"] = wallclock.Clock(None, store.get("timezone"))
+                R["fusion"] = fusion_summary(freps)
+                lines_all = P["lines"]
+            else:
+                tracks, frep = fusion.fuse(repo.load_tracks(ds, store), params)
+                R = an.analyse_layout(tracks, zdict, float(store["width_m"]), float(store["height_m"]), window, params=params)
+                R["fusion"] = frep
+                R["clock"] = wallclock.Clock.for_recording(ds, store)
+                R["recording"] = ds["label"]
+                lines_all = None
             R["pos"], R["pos_error"] = None, False
             try:                                  # sales are optional: a failure here must not break the other pages
-                R["pos"] = sales.analyse_pos(R, repo.load_pos(ds, store))
+                R["pos"] = sales.analyse_pos(R, lines_all if pooled_ds else repo.load_pos(ds, store))
             except Exception:
-                log.exception("Sales data could not be read for dataset %s", ds["id"])
+                log.exception("Sales data could not be read for layout %s", layout["key"])
                 R["pos_error"] = True
             return R
         R = analyses.get(key, build)
@@ -359,8 +458,10 @@ def create_app(repo=None):
         return l
 
     def page(template, store, layouts, layout=None, **kw):
+        ready = [d for d in (layout or {}).get("datasets", []) if d["n_points"]]
         return render_template(template, store=store, ref=store_ref(store), layouts=layouts,
-                               layout=layout, ready_layouts=[l for l in layouts if l["ready"]], **kw)
+                               layout=layout, ready_layouts=[l for l in layouts if l["ready"]],
+                               rec=scope_of(layout) if layout else "latest", rec_list=ready, pool_n=min(len(ready), pooling.MAX_POOL), **kw)
 
     # ------------------------------------------------------------------ public pages and auth
     @app.get("/")
@@ -395,6 +496,45 @@ def create_app(repo=None):
         session["u"] = sess
         session["csrf"] = csrf or secrets.token_urlsafe(24)
         return redirect(nxt or url_for("stores"))
+
+    def google_enabled():
+        return bool(repo.supports_oauth and os.environ.get("GOOGLE_SIGNIN") == "1")
+
+    def app_url():
+        return (os.environ.get("APP_URL") or request.host_url).rstrip("/")
+
+    @app.get("/auth/google")
+    def auth_google():
+        """Start sign-in with Google through Supabase (PKCE). The verifier lives only in this browser's session, so a
+        callback link that did not start here cannot be completed."""
+        if not google_enabled():
+            abort(404)
+        if not login_throttle.allow((request.remote_addr or "?") + ":oauth"):
+            flash("Too many attempts. Wait a few minutes and try again.", "bad")
+            return redirect(url_for("login"))
+        verifier = secrets.token_urlsafe(64)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        session["pkce"] = dict(v=verifier, next=safe_next(request.args.get("next")))
+        return redirect(repo.oauth_start("google", app_url() + url_for("auth_callback"), challenge))
+
+    @app.get("/auth/callback")
+    def auth_callback():
+        if not google_enabled():
+            abort(404)
+        state = session.pop("pkce", None)
+        code = request.args.get("code", "")
+        if request.args.get("error") or not code:
+            flash("Google sign-in was cancelled or did not complete. Try again, or use email and password.", "bad")
+            return redirect(url_for("login"))
+        if not state:
+            flash("That sign-in link has expired or was not started here. Start again from the sign-in page.", "bad")
+            return redirect(url_for("login"))
+        try:
+            sess = repo.oauth_finish(code, state["v"])
+        except AuthError:
+            flash("Google sign-in could not be completed. Try again, or use email and password.", "bad")
+            return redirect(url_for("login"))
+        return start_session(sess, state.get("next"))
 
     @app.post("/demo")
     def demo():
@@ -471,7 +611,7 @@ def create_app(repo=None):
         st, lab = R["stats"], R["labels"]
         merch = st[st.type == "merchandise"]
         mix = lab.mission.value_counts()
-        chk = an.flag_checkout(R["checkout"])
+        chk = an.flag_checkout(R["checkout"], where=checkout_where(R))
         ws = an.wait_summary(R["checkout"])
         kpi = dict(
             visits=int(st.attrs["n_visits"]), shoppers=int(st.attrs["n_shoppers"]),
@@ -482,8 +622,18 @@ def create_app(repo=None):
             quietest=merch.loc[merch.visit_share.idxmin()].zone, quietest_share=float(merch.visit_share.min()),
             rev=(R["pos"]["kpi"]["revenue_per_shopper"] if R.get("pos") else None))
         segs = [dict(name=s, n=int(mix.get(s, 0)), pct=float(mix.get(s, 0) / max(len(lab), 1))) for s in SEGMENTS]
+        sizes = (R.get("parties") or {}).get("sizes", {})
+        fz = R.get("fusion") or {}
+        cams = None
+        if fz.get("cameras", 1) > 1:
+            limit = (R.get("params") or {}).get("fuse_dist_m", 0.8)
+            err = fz.get("overlap_error_m")
+            cams = dict(n=fz["cameras"], enabled=fz["enabled"], merges=fz["overlap_merges"], handoffs=fz["handoffs"], err=err,
+                        tracks_in=fz["tracks_in"], tracks_out=fz["tracks_out"], limit=limit, close=bool(err is not None and err > 0.6 * limit))
+        crowd = dict(cameras=cams, staff=sorted(set((R.get("staff") or {}).values())), n_staff=len(R.get("staff") or {}),
+                     n_parties=sum(1 for v in sizes.values() if v > 1), in_parties=sum(v for v in sizes.values() if v > 1))
         return page("overview.html", store, layouts, layout, title="Overview", active="overview",
-                    kpi=kpi, segs=segs, items=findings(R))
+                    kpi=kpi, segs=segs, items=findings(R), crowd=crowd)
 
     @app.get("/app/s/<ref>/experiment")
     @login_required
@@ -505,8 +655,8 @@ def create_app(repo=None):
         zone = request.args.get("zone") or store.get("hero_zone")
         if zone not in common:
             zone = common[0]
-        Ra, ka = analyse(store, la)
-        Rb, kb = analyse(store, lb)
+        Ra, ka = analyse(store, la, exp_scope())
+        Rb, kb = analyse(store, lb, exp_scope())
         stop = comparisons.get((ka, kb, zone, "stop"), lambda: an.compare_layouts(Ra, Rb, zone, "stop", n_boot=1500))
         reach = comparisons.get((ka, kb, zone, "reach"), lambda: an.compare_layouts(Ra, Rb, zone, "reach", n_boot=1500))
         ca, cb = center(la["zones"][zone]), center(lb["zones"][zone])
@@ -546,7 +696,7 @@ def create_app(repo=None):
         R, _ = analyse(store, layout)
         return page("zones.html", store, layouts, layout, title="Zones", active="zones",
                     rows=records(R["stats"]), n_shoppers=int(R["stats"].attrs["n_shoppers"]),
-                    timing=timing_view(R["timing"]))
+                    timing=timing_view(R["timing"], R.get("clock"), R.get("pooled")))
 
     @app.get("/app/s/<ref>/revenue")
     @login_required
@@ -568,6 +718,70 @@ def create_app(repo=None):
         return page("revenue.html", store, layouts, layout, title="Revenue", active="revenue", P=P, items=items,
                     pos_error=bool(R.get("pos_error")), chart=chart,
                     unmapped_revenue=(float(P["lines"][P["lines"].zone.isin(P["unmapped"])].amount.sum()) if P else 0.0))
+
+    def experiment_facts(store, layouts):
+        """The before/after result for the hero zone, in the same terms as the Experiment page, or None."""
+        ready = [l for l in layouts if l["ready"]]
+        zone = store.get("hero_zone")
+        if len(ready) < 2 or not zone:
+            return None
+        la, lb = ready[0], ready[1]
+        if not all(zone in l["zones"] and l["zones"][zone][4] == "merchandise" for l in (la, lb)):
+            return None
+        Ra, ka = analyse(store, la, exp_scope())
+        Rb, kb = analyse(store, lb, exp_scope())
+        stop = comparisons.get((ka, kb, zone, "stop"), lambda: an.compare_layouts(Ra, Rb, zone, "stop", n_boot=1500))
+        rev = comparisons.get((ka, kb, zone, "rev"), lambda: sales.compare_revenue(Ra, Rb, zone))
+        pct = lambda v: None if v is None or v != v else int(round(v * 100))
+        verdict_of = lambda c: ("not enough data to say" if math.isnan(c["lift"]) or math.isnan(c["ci_low"]) else
+                                "the change likely increased it" if c["ci_low"] > 0 else
+                                "the change likely reduced it" if c["ci_high"] < 0 else "no clear effect (the range includes zero)")
+        out = dict(zone=zone, before=la["label"], after=lb["label"], shoppers_before=int(Ra["stats"].attrs["n_shoppers"]),
+                   shoppers_after=int(Rb["stats"].attrs["n_shoppers"]),
+                   stopped_share_change_pct=pct(stop["lift"]), stopped_share_range_pct=[pct(stop["ci_low"]), pct(stop["ci_high"])],
+                   stopped_share_verdict=verdict_of(stop))
+        if rev:
+            out.update(zone_revenue_per_shopper_change_pct=pct(rev["lift"]), zone_revenue_range_pct=[pct(rev["ci_low"]), pct(rev["ci_high"])],
+                       zone_revenue_verdict=verdict_of(rev))
+        return out
+
+    def brief_facts(store, layouts, layout, R):
+        items = findings(R)
+        chk = an.wait_summary(R["checkout"])
+        return brief_mod.build_facts(store, layout["label"], R, items, wait=chk, experiment=experiment_facts(store, layouts), currency=CURRENCY)
+
+    @app.get("/app/s/<ref>/brief")
+    @login_required
+    def brief(ref):
+        store, layouts = load_ctx(ref)
+        layout = pick_layout(store, layouts, request.args.get("layout"))
+        if not layout or not layout["ready"]:
+            return page("empty.html", store, layouts, layout, title="Brief", active="brief")
+        R, _ = analyse(store, layout)
+        facts = brief_facts(store, layouts, layout, R)
+        result = brief_svc.cached(store["id"], facts) or brief_svc.template(
+            facts, note=None if brief_svc.available() else "Set GEMINI_API_KEY on the server to have Gemini write this summary.")
+        warn = session.pop("brief_warning", None)
+        if warn:
+            result = dict(result, warning=warn)
+        return page("brief.html", store, layouts, layout, title="Brief", active="brief", result=result, facts=facts,
+                    ai_available=brief_svc.available(), remaining=brief_svc.remaining(store["id"]),
+                    limit=brief_svc.cfg()["daily_limit"], model=brief_svc.cfg()["model"], is_demo=bool(store.get("is_demo")))
+
+    @app.post("/app/s/<ref>/brief/write")
+    @login_required
+    @writer_required
+    def brief_write(ref):
+        store, layouts = load_ctx(ref, need_edit=True)
+        layout = pick_layout(store, layouts, request.form.get("layout"))
+        if not layout or not layout["ready"]:
+            abort(404)
+        R, _ = analyse(store, layout)
+        facts = brief_facts(store, layouts, layout, R)
+        result = brief_svc.write(store["id"], facts, force=bool(request.form.get("again")), is_demo=bool(store.get("is_demo")))
+        if result["source"] != "gemini":
+            session["brief_warning"] = result.get("warning") or result.get("note")
+        return redirect(url_for("brief", ref=ref, layout=layout["key"]))
 
     @app.get("/app/s/<ref>/flags")
     @login_required
@@ -686,8 +900,12 @@ def create_app(repo=None):
         store, layouts = load_ctx(ref, need_edit=True)
         keys = repo.list_api_keys(g.user, store["id"])
         new_key = session.pop("new_key", None)
+        starts = {l["key"]: wallclock.Clock.for_recording(l["dataset"], store) for l in layouts}
+        rec_starts = {d["id"]: wallclock.Clock.for_recording(d, store).start_label() for l in layouts for d in l["datasets"]}
         return page("settings.html", store, layouts, None, title="Settings", active="settings",
-                    keys=keys, new_key=new_key, host=request.host_url.rstrip("/"))
+                    keys=keys, new_key=new_key, host=request.host_url.rstrip("/"), starts=starts, rec_starts=rec_starts,
+                    detection=thresholds.describe(store.get("settings")), changed=len(store.get("settings") or {}),
+                    zone_names=wallclock.COMMON_ZONES, tz=store.get("timezone") or wallclock.DEFAULT_TZ)
 
     @app.get("/app/s/<ref>/agent")
     @login_required
@@ -710,6 +928,12 @@ def create_app(repo=None):
             width_m=val.clean_number(request.form.get("width_m"), "width", 3, 200),
             height_m=val.clean_number(request.form.get("height_m"), "depth", 3, 200),
             window_s=int(val.clean_number(request.form.get("window_s"), "queue window", 60, 1800)))
+        tz = (request.form.get("timezone") or "").strip()
+        if tz and tz != (store.get("timezone") or wallclock.DEFAULT_TZ):   # only touch the column when it changes
+            try:
+                vals["timezone"] = wallclock.valid_timezone(tz)
+            except ValueError as e:
+                raise val.ValidationError(str(e))
         for l in layouts:   # shrinking the floor must not strand existing zones
             val.clean_zones(l["zones"], vals["width_m"], vals["height_m"])
         repo.update_store(g.user, store["id"], vals)
@@ -815,8 +1039,67 @@ def create_app(repo=None):
         label = val.clean_text(request.form.get("label", "") or f"Upload {time.strftime('%Y-%m-%d')}", "recording name", 60)
         ds = repo.create_dataset(g.user, layout["id"], label, "upload")
         repo.save_tracks(ds, store, df)
+        started = (request.form.get("started_at") or "").strip()
+        if started:
+            repo.set_dataset_start(ds, parse_start_or_400(started, store))
         flash(f"Recording saved: {len(df):,} points from {df.track_id.nunique():,} people. Only track_id, t, x and y were kept.", "good")
         return redirect(url_for("overview", ref=ref, layout=key))
+
+    @app.post("/app/s/<ref>/recordings/<dataset_id>/delete")
+    @login_required
+    @writer_required
+    def delete_recording(ref, dataset_id):
+        store, layouts = load_ctx(ref, need_edit=True)
+        for l in layouts:
+            for d in l["datasets"]:
+                if d["id"] == dataset_id:
+                    repo.delete_dataset(d, store)
+                    flash(f"Recording \"{d['label']}\" and its sales file were deleted.", "good")
+                    return redirect(url_for("settings", ref=ref) + "#s-lay")
+        abort(404)
+
+    @app.post("/app/s/<ref>/settings/detection")
+    @login_required
+    @writer_required
+    def settings_detection(ref):
+        store, _ = load_ctx(ref, need_edit=True)
+        try:
+            new = {} if request.form.get("reset") else thresholds.parse_form(request.form)
+        except ValueError as e:
+            raise val.ValidationError(str(e))
+        if new != (store.get("settings") or {}):                      # only touch the column when something changed
+            try:
+                repo.update_store(g.user, store["id"], {"settings": new})
+            except RepoError as e:
+                raise val.ValidationError(f"The settings could not be saved. If you use Supabase, run supabase/migrations/20261012000000_settings.sql first. ({e})")
+        flash("Detection settings reset to the defaults." if request.form.get("reset") else
+              "Detection settings saved. Staff, party and sales settings apply to existing recordings now; stitching applies the next time a camera agent starts.", "good")
+        return redirect(url_for("settings", ref=ref) + "#detection")
+
+    @app.get("/api/ingest/v1/config")
+    def ingest_config():
+        """What a camera agent should use: the stitching settings for this store."""
+        auth = request.headers.get("Authorization", "")
+        found = repo.resolve_api_key(auth[7:].strip()) if auth.lower().startswith("bearer ") else None
+        if not found:
+            return jsonify(error="That API key is not valid or has been revoked."), 401
+        store = repo.svc_get_store(found["store_id"])
+        if not store:
+            return jsonify(error="That key cannot be used."), 403
+        return jsonify(settings=thresholds.agent_settings(store.get("settings")))
+
+    @app.post("/app/s/<ref>/layouts/<key>/start")
+    @login_required
+    @writer_required
+    def set_recording_start(ref, key):
+        store, layouts = load_ctx(ref, need_edit=True)
+        layout = layout_by_key(layouts, key)
+        if not layout or not layout["dataset"]:
+            abort(404)
+        text = (request.form.get("started_at") or "").strip()
+        repo.set_dataset_start(layout["dataset"], parse_start_or_400(text, store) if text else None)
+        flash("Recording start time saved." if text else "Recording start time cleared.", "good")
+        return redirect(url_for("settings", ref=ref) + "#s-lay")
 
     @app.post("/app/s/<ref>/layouts/<key>/sales")
     @login_required
@@ -833,9 +1116,11 @@ def create_app(repo=None):
         data = f.read(val.MAX_UPLOAD_BYTES + 1) if f else b""
         if not data:
             raise val.ValidationError("Choose a CSV file first.")
-        df = val.pos_from_csv(data)
+        report = {}
+        df = val.pos_from_csv(data, clock=wallclock.Clock.for_recording(ds, store), report=report)
         repo.save_pos(ds, store, df)
-        flash(f"Sales saved: {df.txn_id.nunique():,} sales from {len(df):,} lines. Only txn_id, t, zone and amount were kept.", "good")
+        flash(f"Sales saved: {df.txn_id.nunique():,} sales from {len(df):,} lines. Only txn_id, t, zone and amount were kept."
+              + (f" {report['dropped_before_start']} lines from before the recording started were left out." if report.get("dropped_before_start") else ""), "good")
         return redirect(url_for("revenue", ref=ref, layout=key))
 
     @app.post("/app/s/<ref>/keys/create")
@@ -883,6 +1168,11 @@ def create_app(repo=None):
             return jsonify(error=f"This store has no layout {key}. Create it in the app first."), 404
         ds = repo.svc_get_or_create_dataset(layout["id"], recording, "ingest")
         repo.append_points(ds, df)
+        if body.get("started_at") and not ds.get("started_at"):          # the first writer sets it; later batches never move it
+            try:
+                repo.set_dataset_start(ds, wallclock.iso(wallclock.parse_start(body["started_at"], "UTC")))
+            except (ValueError, RepoError):
+                pass                                                     # a bad start time must not lose the points
         return jsonify(accepted=int(len(df)), layout=key, recording=recording), 202
 
     @app.post("/api/ingest/v1/sales")
@@ -902,13 +1192,13 @@ def create_app(repo=None):
         try:
             key = val.clean_layout_key(body.get("layout"))
             recording = val.clean_text(str(body.get("recording") or "Live"), "recording", 60)
-            df = val.pos_from_json(body.get("sales"))
+            layout = repo.svc_layout_by_key(store["id"], key)
+            if not layout:
+                return jsonify(error=f"This store has no layout {key}. Create it in the app first."), 404
+            ds = repo.svc_get_or_create_dataset(layout["id"], recording, "ingest")
+            df = val.pos_from_json(body.get("sales"), clock=wallclock.Clock.for_recording(ds, store))
         except val.ValidationError as e:
             return jsonify(error=str(e)), 400
-        layout = repo.svc_layout_by_key(store["id"], key)
-        if not layout:
-            return jsonify(error=f"This store has no layout {key}. Create it in the app first."), 404
-        ds = repo.svc_get_or_create_dataset(layout["id"], recording, "ingest")
         with pos_lock:                            # read-merge-write: one writer at a time in this process
             repo.append_pos(ds, store, df)
         return jsonify(accepted=int(len(df)), layout=key, recording=recording), 202
