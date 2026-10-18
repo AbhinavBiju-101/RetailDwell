@@ -17,14 +17,81 @@
   </div>
   <button class="btn" type="button" id="shuffle">Show different paths</button>
 </form>
+<form class="toolbar" id="filters" onsubmit="return false" aria-label="Narrow the visits shown in the map and in the flow diagram">
+  <div>
+    <label class="field-label" for="f-zone">Visits that stopped in</label>
+    <select id="f-zone"><option value="">Any zone</option></select>
+  </div>
+  <div id="f-time-wrap" hidden>
+    <label class="field-label" for="f-time">Visits that began</label>
+    <select id="f-time"><option value="">At any time</option></select>
+  </div>
+  <div id="f-party-wrap" hidden>
+    <label class="field-label" for="f-party">Visits made</label>
+    <select id="f-party"><option value="">Alone or in a party</option><option value="alone">Alone</option><option value="party">With a party (arrived and left together)</option></select>
+  </div>
+  <p class="map-note" style="margin: 0; align-self: end">These filters apply to the map and to "Where people go next".</p>
+</form>
 
 <div class="map-frame">
   <div class="map" id="paths" data-plot role="img" aria-label="Sampled shopper journeys on the store floor, {{ layout.label }}"></div>
   <p class="map-note" id="paths-note">Loading paths.</p>
 </div>
+<section class="flow" aria-labelledby="flow-h" style="margin-top: 2.25rem">
+  <h2 id="flow-h">Where people go next</h2>
+  <p class="lede">Each shopper becomes the list of zones they spent time in, in order. Band width is the number of shoppers. The entrance is the start and the end of a path, and routes taken by fewer than {{ flow_min_edge }} shoppers are left out of the diagram.</p>
+
+  <form class="toolbar" onsubmit="return false">
+    <div>
+      <label class="field-label" for="flow-seg">Visit type</label>
+      <select id="flow-seg">
+        <option value="shoppers">All shoppers (loiterers left out)</option>
+        <option value="directed">Directed</option>
+        <option value="exploratory">Exploratory</option>
+      </select>
+    </div>
+  </form>
+
+  <div class="map-frame">
+    <div class="chart" id="flow" data-plot style="height: 420px" role="img" aria-label="Flow of shoppers from zone to zone, first stop to last, {{ layout.label }}. The table below gives the same figures as text."></div>
+    <p class="map-note" id="flow-note">Loading routes.</p>
+  </div>
+
+  <ul class="findings" id="flow-findings" style="margin-top: 1rem"></ul>
+
+  <h3 style="margin-top: 1.5rem">Zone by zone</h3>
+  <div class="table-wrap">
+    <table id="flow-table">
+      <thead><tr>
+        <th scope="col">Zone</th><th scope="col">Shoppers reaching it</th><th scope="col">First stop for</th>
+        <th scope="col">Last stop for</th><th scope="col">Most common next zone</th><th scope="col">Went straight back</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="map-note">"First stop" and "last stop" are shares of the shoppers who reached the zone. "Went straight back" counts arrivals from another shelf zone that returned to it next, and is shown once a zone has {{ flow_min_n }} arrivals. Routes are probable: a shopper whose track broke may appear twice.</p>
+</section>
 {% endblock %}
 
 {% block scripts %}
+<script>
+window.JFilter = {
+  query() {
+    const z = document.getElementById("f-zone").value, t = document.getElementById("f-time").value, p = document.getElementById("f-party").value;
+    return (z ? "&visited=" + encodeURIComponent(z) : "") + (t !== "" ? "&w=" + encodeURIComponent(t) : "") + (p ? "&party=" + encodeURIComponent(p) : "");
+  },
+  active() { return ["f-zone", "f-time", "f-party"].some((id) => document.getElementById(id).value !== ""); },
+  fill(filters) {                                   // options come from the server once, then stay put
+    const z = document.getElementById("f-zone"), t = document.getElementById("f-time");
+    if (z.options.length === 1) filters.zones.forEach((n) => z.add(new Option(n, n)));
+    if (t.options.length === 1 && filters.windows.length) {
+      filters.windows.forEach((w) => t.add(new Option(w.label + " (" + w.shoppers + " shoppers)", w.w)));
+      document.getElementById("f-time-wrap").hidden = false;
+    }
+    document.getElementById("f-party-wrap").hidden = !(filters.parties && filters.parties.n_parties > 0);
+  },
+};
+</script>
 <script>
 document.addEventListener("DOMContentLoaded", function () {
   const seg = document.getElementById("segment"), count = document.getElementById("count");
@@ -34,8 +101,9 @@ document.addEventListener("DOMContentLoaded", function () {
   const COLORS = { "directed": "--seg-directed", "exploratory": "--seg-exploratory", "loiterer / waiter": "--seg-loiterer", "pass-through": "--seg-pass" };
 
   async function load() {
-    const url = "{{ url_for('api_journeys', ref=ref, key=layout.key) }}?segment=" + encodeURIComponent(seg.value) + "&n=" + count.value + "&seed=" + seed;
+    const url = "{{ url_for('api_journeys', ref=ref, key=layout.key) }}?segment=" + encodeURIComponent(seg.value) + "&n=" + count.value + "&seed=" + seed + JFilter.query();
     data = await App.getJSON(url);
+    JFilter.fill(data.filters);
     draw();
   }
   function draw() {
@@ -57,13 +125,83 @@ document.addEventListener("DOMContentLoaded", function () {
     const lay = App.mapLayout(data, { showlegend: true, legend: { orientation: "h", y: -0.12, x: 0 }, margin: { l: 44, r: 8, t: 6, b: 52 } });
     App.plot("paths", traces, lay);
     document.getElementById("paths").classList.add("ready");
-    note.textContent = "Showing " + data.paths.length + " of " + data.available + " " + (seg.value === "all" ? "visits" : seg.value + " visits") + ". Labels are inferred and carry a confidence score.";
+    const kind = seg.value === "all" ? "visits" : seg.value + " visits";
+    note.textContent = data.available === 0
+      ? "No " + kind + " match these filters."
+      : "Showing " + data.paths.length + " of " + data.available + " " + kind + (JFilter.active() ? " that match the filters (" + data.of_segment + " before filtering)" : "") + ". Labels are inferred and carry a confidence score.";
   }
   const reload = () => { out.textContent = count.value; clearTimeout(pending); pending = setTimeout(load, 120); };
   seg.addEventListener("change", () => { seed = 1; reload(); });
+  ["f-zone", "f-time", "f-party"].forEach((id) => document.getElementById(id).addEventListener("change", () => { seed = 1; reload(); document.dispatchEvent(new Event("jfilters")); }));
   count.addEventListener("input", reload);
   document.getElementById("shuffle").addEventListener("click", () => { seed += 1; reload(); });
 
+  App.onRender(async function () { if (!data) await load(); else draw(); });
+});
+</script>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const seg = document.getElementById("flow-seg"), note = document.getElementById("flow-note");
+  let data = null;
+
+  function hue(label) { let h = 0; for (const c of label) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+  function pct(v) { return v == null ? "" : Math.round(v * 100) + "%"; }
+
+  async function load() {
+    data = await App.getJSON("{{ url_for('api_flow', ref=ref, key=layout.key) }}?segment=" + encodeURIComponent(seg.value) + JFilter.query());
+    draw();
+  }
+
+  function draw() {
+    if (!data) return;
+    const dark = document.documentElement.dataset.theme === "dark";
+    const sk = data.sankey, el = document.getElementById("flow");
+    if (!sk || !sk.links.length) {
+      el.innerHTML = ""; el.style.height = "auto";
+      note.textContent = data.note || "No routes to show for this group.";
+    } else {
+      el.style.height = "420px";
+      const col = (label, a) => label === "Leaves the store" || label === "Goes on" ? "rgba(128,140,155," + a + ")"
+        : "hsla(" + hue(label) + ",50%," + (dark ? 62 : 40) + "%," + a + ")";
+      const total = data.n_paths;
+      App.plot("flow", [{
+        type: "sankey", orientation: "h", arrangement: "snap",
+        node: { pad: 14, thickness: 14, line: { width: 0 }, label: sk.nodes.map((n) => n.label), color: sk.nodes.map((n) => col(n.label, 0.95)),
+                hovertemplate: "%{label}: %{value} shoppers<extra></extra>" },
+        link: { source: sk.links.map((l) => l.source), target: sk.links.map((l) => l.target), value: sk.links.map((l) => l.value),
+                color: sk.links.map((l) => col(sk.nodes[l.source].label, 0.32)),
+                customdata: sk.links.map((l) => Math.round(l.value / total * 100)),
+                hovertemplate: "%{source.label} to %{target.label}<br>%{value} shoppers (%{customdata}% of all)<extra></extra>" },
+      }], App.baseLayout({ margin: { l: 6, r: 6, t: 6, b: 6 } }));
+      el.classList.add("ready");
+      note.textContent = "Follows the first " + sk.steps + " zones of " + data.n_paths + " visits. " + (data.note || "") + " Labels are inferred.";
+    }
+
+    const list = document.getElementById("flow-findings");
+    list.replaceChildren();
+    data.findings.forEach((f) => {
+      const li = document.createElement("li"); li.className = "finding " + f.tone;
+      const h = document.createElement("h3"); h.textContent = f.kind;
+      const p = document.createElement("p"); p.textContent = f.text;
+      li.append(h, p); list.append(li);
+    });
+
+    const tb = document.querySelector("#flow-table tbody");
+    tb.replaceChildren();
+    data.rows.forEach((r) => {
+      const tr = document.createElement("tr");
+      const th = document.createElement("th"); th.scope = "row"; th.textContent = r.zone; tr.append(th);
+      [r.reached + " (" + pct(r.share) + ")", pct(r.first_pct), pct(r.leaves_pct),
+       r.next_zone ? r.next_zone + " (" + pct(r.next_pct) + ")" : "no common route",
+       r.turn_pct == null ? "" : pct(r.turn_pct)].forEach((v) => {
+        const td = document.createElement("td"); td.textContent = v; tr.append(td);
+      });
+      tb.append(tr);
+    });
+  }
+
+  seg.addEventListener("change", load);
+  document.addEventListener("jfilters", load);
   App.onRender(async function () { if (!data) await load(); else draw(); });
 });
 </script>

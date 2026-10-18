@@ -21,7 +21,7 @@
     {% endif %}
     <div class="rail-foot">
       <a class="back-link" href="{{ url_for('landing') }}">&larr; Back to main page</a>
-      {% if store and layout and endpoint in ('overview', 'zones', 'revenue', 'flags', 'journeys', 'brief') %}
+      {% if store and layout and endpoint in ('overview', 'zones', 'revenue', 'flags', 'journeys', 'whatif', 'brief') %}
       <div>
         {% if ready_layouts|length > 1 %}
         <span class="field-label" id="layout-label">Layout</span>
@@ -57,7 +57,7 @@
   <main id="main">
     {% if not can_edit %}<p class="banner">Demo account. Everything here is simulated and read-only.</p>{% endif %}
     {% include "_flash.html" %}
-    {% if layout and rec != 'latest' and endpoint in ('overview', 'zones', 'revenue', 'flags', 'journeys', 'brief') %}
+    {% if layout and rec != 'latest' and endpoint in ('overview', 'zones', 'revenue', 'flags', 'journeys', 'whatif', 'brief') %}
     <p class="banner" role="note" style="background: var(--panel); color: var(--ink)">
       {% if rec == 'all' %}Showing all {{ pool_n }} recordings of this layout pooled together. Weekdays and weekends are mixed as they are.
         {% if rec_list|rejectattr('started_at')|list|length %}Some recordings have no start time, so the hour-by-hour findings are switched off until they are set in Settings.{% endif %}

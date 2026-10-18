@@ -352,6 +352,13 @@ def flag_checkout(cm, where=None):
 
 
 # ---------- each zone against its own usual share, by time window ----------
+def visit_slots(df, window_s=TIME_WINDOW_S, slot_fn=None):
+    """Time window of each visit (by its first sample), numbered the same way as `time_baselines` numbers its windows."""
+    t0 = df.groupby("track_id").t.min()
+    w = slot_fn(t0.to_numpy()) if slot_fn else (t0 // window_s).astype(int).to_numpy()
+    return pd.Series(np.asarray(w), index=t0.index)
+
+
 def time_baselines(df, labels, zones, window_s=TIME_WINDOW_S, slot_fn=None):
     """Share of shoppers reaching each merchandise zone per time window, against the zone's own average.
 

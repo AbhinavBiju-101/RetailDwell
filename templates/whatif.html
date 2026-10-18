@@ -1,0 +1,165 @@
+{% extends "base_app.html" %}
+{% block content %}
+<h1>What if a zone moved?</h1>
+<p class="lede">Pick a shelf zone and see how many shoppers would be likely to stop in it at each open spot on the floor. This is an estimate from the tracks already recorded, not a forecast. It assumes people stop in the zone at the same rate they do today once they walk past it.</p>
+
+<form class="toolbar" id="wi-controls" onsubmit="return false">
+  <div>
+    <label class="field-label" for="wi-zone">Zone to move</label>
+    <select id="wi-zone">{% for n in merch %}<option value="{{ n }}">{{ n }}</option>{% endfor %}</select>
+  </div>
+  <div>
+    <label class="field-label" for="wi-x">New centre, across (m)</label>
+    <input class="plain" type="number" id="wi-x" step="0.5" min="0" style="width: 6rem">
+  </div>
+  <div>
+    <label class="field-label" for="wi-y">New centre, up (m)</label>
+    <input class="plain" type="number" id="wi-y" step="0.5" min="0" style="width: 6rem">
+  </div>
+  <button class="btn" type="button" id="wi-go">Estimate</button>
+  <button class="btn" type="button" id="wi-best">Try the best open spot</button>
+  <div>
+    <label class="field-label" for="wi-other">Or swap it with</label>
+    <select id="wi-other"><option value="">Choose a zone</option>{% for n in merch %}<option value="{{ n }}">{{ n }}</option>{% endfor %}</select>
+  </div>
+  <button class="btn" type="button" id="wi-swap">Estimate the swap</button>
+</form>
+
+<div class="map-frame">
+  <div class="map" id="wi-map" data-plot role="img" aria-label="Floor plan coloured by the share of shoppers who would stop in the chosen zone if its centre were placed at each open spot, {{ layout.label }}. Use the number boxes above to place the zone without the map."></div>
+  <p class="map-note" id="wi-note">Click an open spot on the map, or type a position above.</p>
+</div>
+
+<section id="wi-result" aria-live="polite" style="margin-top: 1.25rem" hidden>
+  <h2 id="wi-head"></h2>
+  <p id="wi-detail"></p>
+</section>
+<section id="wi-swap-result" aria-live="polite" style="margin-top: 1.25rem" hidden>
+  <h2 id="wi-swap-head"></h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th scope="col">Zone</th><th scope="col">Stop today</th><th scope="col">Estimate after the swap</th><th scope="col">Change</th></tr></thead>
+      <tbody id="wi-swap-rows"></tbody>
+    </table>
+  </div>
+  <p id="wi-swap-detail"></p>
+</section>
+<p id="wi-error" class="lede" role="alert" hidden></p>
+
+<h3 style="margin-top: 1.75rem">How this is worked out, and where it can mislead</h3>
+<ul>
+  <li>A shopper "passes" a zone if they spend {{ presence_s }} seconds or more within {{ catch_m }} m of its edge. Stopping in the zone counts.</li>
+  <li>Capture rate is the share of those who pass that go on to stop. The estimate keeps it and re-counts who would pass the new spot, using the same recorded visits.</li>
+  <li>It does not know that a moved zone changes where people walk, that a new neighbour may draw or hide it, or that the space it leaves behind will be used differently. Treat it as a way to rank ideas before trying one, then confirm with a before and after recording.</li>
+  <li>The error figure comes from simulated shops where the rules were known, so it is a best case. Loiterers and staff are left out, and a short recording makes any estimate shakier.</li>
+</ul>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const sel = document.getElementById("wi-zone"), xIn = document.getElementById("wi-x"), yIn = document.getElementById("wi-y");
+  const note = document.getElementById("wi-note"), box = document.getElementById("wi-result"), err = document.getElementById("wi-error");
+  const el = document.getElementById("wi-map");
+  let scan = null, result = null, bound = false;
+  const pct = (v) => Math.round(v * 100) + "%";
+  const pts = (v) => (v >= 0 ? "+" : "\u2212") + Math.abs(Math.round(v * 100));
+
+  async function get(url) {
+    const rec = new URLSearchParams(location.search).get("rec");
+    if (rec) url += "&rec=" + encodeURIComponent(rec);
+    const r = await fetch(url);
+    return { ok: r.ok, body: await r.json().catch(() => ({})) };
+  }
+  function fail(msg) { err.textContent = msg; err.hidden = !msg; }
+
+  async function loadScan() {
+    result = null; box.hidden = true; fail("");
+    const r = await get("{{ url_for('api_whatif_scan', ref=ref, key=layout.key) }}?zone=" + encodeURIComponent(sel.value));
+    if (!r.ok) { scan = null; Plotly.purge(el); fail(r.body.error || "This zone could not be analysed."); return; }
+    scan = r.body;
+    xIn.value = ""; yIn.value = "";
+    draw();
+  }
+
+  function draw() {
+    if (!scan) return;
+    const flat = scan.z.flat().filter((v) => v != null);
+    const zmax = Math.max(0.05, ...flat);
+    const trace = { type: "heatmap", x: scan.xs, y: scan.ys, z: scan.z.map((row) => row.map((v) => (v == null ? NaN : v * 100))),
+      colorscale: App.stops(), zmin: 0, zmax: zmax * 100, hoverongaps: false, xgap: 0, ygap: 0, zsmooth: false,
+      colorbar: { title: { text: "% who stop", side: "right" }, thickness: 10, len: 0.85, outlinewidth: 0, tickfont: { size: 11 } },
+      hovertemplate: "Centre at x %{x:.1f} m, y %{y:.1f} m<br>about %{z:.0f}% of shoppers would stop<extra></extra>" };
+    const lay = App.mapLayout(scan);
+    const cur = scan.zones[sel.value];
+    lay.shapes.push({ type: "rect", x0: cur.x0, y0: cur.y0, x1: cur.x1, y1: cur.y1, line: { color: App.css("--accent") || "#2a6", width: 3 }, fillcolor: "rgba(0,0,0,0)", layer: "above" });
+    if (result) {
+      const n = result.new;
+      lay.shapes.push({ type: "rect", x0: n[0], y0: n[1], x1: n[2], y1: n[3], line: { color: App.css("--accent") || "#2a6", width: 3, dash: "dash" }, fillcolor: "rgba(255,255,255,0.18)", layer: "above" });
+      lay.annotations.push({ x: (n[0] + n[2]) / 2, y: (n[1] + n[3]) / 2, text: "New spot", showarrow: false, font: { size: 12, color: "#fff" }, bgcolor: "rgba(10,18,30,0.62)", borderpad: 2 });
+    }
+    App.plot("wi-map", [trace], lay);
+    el.classList.add("ready");
+    if (!bound) {
+      bound = true;
+      el.on("plotly_click", (ev) => { const p = ev.points && ev.points[0]; if (p) { xIn.value = p.x; yIn.value = p.y; estimate(); } });
+    }
+  }
+
+  async function estimate() {
+    const cx = parseFloat(xIn.value), cy = parseFloat(yIn.value);
+    if (isNaN(cx) || isNaN(cy)) { fail("Enter both a position across and a position up, or click the map."); return; }
+    fail("");
+    const r = await get("{{ url_for('api_whatif', ref=ref, key=layout.key) }}?zone=" + encodeURIComponent(sel.value) + "&cx=" + cx + "&cy=" + cy);
+    if (!r.ok) { result = null; box.hidden = true; fail(r.body.error || "That position could not be estimated."); draw(); return; }
+    result = r.body;
+    document.getElementById("wi-swap-result").hidden = true;
+    document.getElementById("wi-head").textContent = sel.value + ": about " + pct(result.reach_pred) + " of shoppers would stop here, against " + pct(result.reach_now) + " today";
+    document.getElementById("wi-detail").textContent =
+      "That is " + pts(result.change) + " points. " +
+      result.passers_now + " of " + result.n_visits + " shoppers pass it today and " + pct(result.capture) + " of them stop; " +
+      result.passers_new + " would pass the new spot. " +
+      (result.capture >= 0.95 ? "Everyone who passes it today stops, because it sits off the main routes, so at a busier spot the real rate may be lower than assumed and this figure may be too high. " : "") + "In tests on simulated shops, half of these estimates landed within {{ err_median }} points of what happened and four in five within {{ err_80 }}. A real shop will be less predictable, so use it to rank ideas, not to promise a number.";
+    box.hidden = false;
+    draw();
+  }
+
+
+  async function estimateSwap() {
+    const other = document.getElementById("wi-other").value;
+    if (!other) { fail("Choose the zone to swap with."); return; }
+    fail("");
+    const r = await get("{{ url_for('api_whatif_swap', ref=ref, key=layout.key) }}?a=" + encodeURIComponent(sel.value) + "&b=" + encodeURIComponent(other));
+    const sbox = document.getElementById("wi-swap-result");
+    if (!r.ok) { sbox.hidden = true; fail(r.body.error || "That swap could not be estimated."); return; }
+    const d = r.body;
+    result = null; box.hidden = true;
+    document.getElementById("wi-swap-head").textContent = "Swapping " + d.a.zone + " and " + d.b.zone;
+    const tb = document.getElementById("wi-swap-rows");
+    tb.replaceChildren();
+    [d.a, d.b].forEach((z) => {
+      const tr = document.createElement("tr");
+      const th = document.createElement("th"); th.scope = "row"; th.textContent = z.zone; tr.append(th);
+      [pct(z.reach_now), pct(z.reach_pred), pts(z.change) + " points"].forEach((v) => { const td = document.createElement("td"); td.textContent = v; tr.append(td); });
+      tb.append(tr);
+    });
+    document.getElementById("wi-swap-detail").textContent =
+      "These show where each zone's stops would be likely to move. They do not show whether the swap gains stops overall: in tests on simulated shops the net change of a swap was predicted no better than assuming nothing changes, because what one zone gains the other tends to lose. Judge a swap by the zone that matters most to you, for example the one with the higher margin. " +
+      (d.a.capture >= 0.95 || d.b.capture >= 0.95 ? "One of these zones sits off the main routes, so its estimate may be too high. " : "") +
+      "Swaps are harder to call than single moves. In tests on simulated shops, estimates were typically off by about {{ swap_err_median }} points (four in five within {{ swap_err_80 }}, worst 35) and called the direction of a clear change right 4 times in 5. A real shop will be less predictable, so use it to rank ideas, not to promise a number.";
+    sbox.hidden = false;
+  }
+  document.getElementById("wi-swap").addEventListener("click", estimateSwap);
+
+  document.getElementById("wi-go").addEventListener("click", estimate);
+  document.getElementById("wi-best").addEventListener("click", () => {
+    if (!scan) return;
+    let best = null;
+    scan.z.forEach((row, j) => row.forEach((v, i) => { if (v != null && (!best || v > best.v)) best = { v: v, x: scan.xs[i], y: scan.ys[j] }; }));
+    if (best) { xIn.value = best.x; yIn.value = best.y; estimate(); }
+  });
+  sel.addEventListener("change", loadScan);
+  App.onRender(async function () { if (!scan) await loadScan(); else draw(); });
+});
+</script>
+{% endblock %}

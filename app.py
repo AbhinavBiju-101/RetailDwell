@@ -36,7 +36,9 @@ import brief as brief_mod  # noqa: E402
 import thresholds  # noqa: E402
 import pooling  # noqa: E402
 import fusion  # noqa: E402
-from config import TIME_WINDOW_S  # noqa: E402
+import flow as zoneflow  # noqa: E402
+import whatif as whatif_model  # noqa: E402
+from config import TIME_WINDOW_S, FLOW_MIN_EDGE, FLOW_MIN_N, MIN_PRESENCE_S, WHATIF_CATCH_M, WHATIF_ERR_MEDIAN_PTS, WHATIF_ERR_80_PTS, WHATIF_SWAP_ERR_MEDIAN_PTS, WHATIF_SWAP_ERR_80_PTS  # noqa: E402
 import validation as val  # noqa: E402
 from repo import get_repo  # noqa: E402
 from repo_base import AuthError, Forbidden, NotFound, RepoError, store_ref  # noqa: E402
@@ -49,13 +51,13 @@ log = logging.getLogger("dwell")
 LOITERER = an.LOITERER
 SEGMENTS = ["directed", "exploratory", LOITERER, "pass-through"]
 NAV = [("overview", "Overview"), ("experiment", "Experiment"), ("zones", "Zones"),
-       ("revenue", "Revenue"), ("flags", "Flags"), ("journeys", "Journeys"), ("brief", "Brief")]
+       ("revenue", "Revenue"), ("flags", "Flags"), ("journeys", "Journeys"), ("whatif", "What-if"), ("brief", "Brief")]
 CURRENCY = os.environ.get("CURRENCY_SYMBOL", "\u20b9")
 TONE = {"Bottleneck": "bad", "Dead zone": "bad", "Visibility problem": "warn",
         "Quieter than usual": "warn", "Busier than usual": "info",
         "Pass-through": "info", "Destination": "info", "Hot zone": "good",
         "Healthy": "good", "OK": "good",
-        "Offer problem": "warn", "Hidden earner": "info", "Data check": "warn"}
+        "Offer problem": "warn", "Hidden earner": "info", "Data check": "warn", "Turn-back": "warn"}
 TONE_RANK = {"bad": 0, "warn": 1, "info": 2, "good": 3}
 PLAN_TYPES = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"))
 MAX_PLAN_BYTES = 5 * 1024 * 1024
@@ -83,6 +85,42 @@ def fusion_summary(reps):
                 tracks_in=sum(r["tracks_in"] for r in reps), tracks_out=sum(r["tracks_out"] for r in reps),
                 overlap_merges=sum(r["overlap_merges"] for r in reps), handoffs=sum(r["handoffs"] for r in reps),
                 overlap_pairs=sum(r["overlap_pairs"] for r in reps), overlap_error_m=float(np.median(errs)) if errs else None)
+
+
+def journey_filters(R):
+    """What the Journeys page can narrow to: zones to have stopped in, and time windows (not for pooled days without clock times)."""
+    pooled = R.get("pooled")
+    view = timing_view(R["timing"], R.get("clock"), pooled)
+    windows = []
+    if view.get("windows") and (not pooled or pooled.get("clock")):
+        windows = [dict(w=int(x["w"]), label=v["label"], shoppers=int(x["shoppers"]))
+                   for x, v in zip(R["timing"]["windows"], view["windows"])]
+    sizes = (R.get("parties") or {}).get("sizes", {})
+    in_party = [t for t, pid in (R.get("parties") or {}).get("of", {}).items() if sizes.get(pid, 1) >= 2]
+    return dict(zones=sorted(R["zones"]), windows=windows, parties=dict(n_parties=sum(1 for n in sizes.values() if n >= 2), n_visits=len(in_party)))
+
+
+def journey_ids(R, visited, w, party=None):
+    """Track ids matching the Journeys filters, or None when no filter is set. Raises ValueError for a value that is not on offer."""
+    ids = None
+    if party not in (None, "", "alone", "party"):
+        raise ValueError("unknown party filter")
+    if visited:
+        if visited not in R["zones"]:
+            raise ValueError("unknown zone")
+        ids = zoneflow.ids_stopping_in(R, visited)
+    if party:
+        pa = R.get("parties") or {}
+        members = {int(t) for t, pid in pa.get("of", {}).items() if pa.get("sizes", {}).get(pid, 1) >= 2}
+        grp = members if party == "party" else {int(t) for t in R["labels"].track_id} - members
+        ids = grp if ids is None else ids & grp
+    if w is not None:
+        if w not in {x["w"] for x in journey_filters(R)["windows"]}:
+            raise ValueError("unknown time window")
+        slots = an.visit_slots(R["df"], R["timing"]["window_s"], R.get("slot_fn"))
+        in_w = set(slots[slots == w].index.astype(int))
+        ids = in_w if ids is None else ids & in_w
+    return ids
 
 
 def checkout_where(R):
@@ -165,6 +203,8 @@ def findings(R):
         out.append(dict(kind=chk["kind"], tone=TONE[chk["kind"]], text=chk["message"]))
     out += [dict(kind=f["kind"], tone=TONE.get(f["kind"], "info"), text=f["text"])
             for f in (R.get("pos") or {}).get("items", [])]
+    out += [dict(kind=f["kind"], tone=TONE["Turn-back"], text=f["text"], zone=f["zone"])
+            for f in (R.get("flow") or {}).get("findings", [])]
     out.sort(key=lambda f: TONE_RANK[f["tone"]])
     return out
 
@@ -428,6 +468,7 @@ def create_app(repo=None, brief_service=None):
                                       pooled=dict(n=P["n"], slot_fn=P["slot_fn"], minute_of_day_fn=P["minute_of_day_fn"]))
                 R["pooled"] = dict(n=P["n"], labels=P["labels"], undated=P["undated"], clock=P["slot_fn"] is not None,
                                    capped=len(ready) > pooling.MAX_POOL, of=len(ready))
+                R["slot_fn"] = P["slot_fn"]
                 R["clock"] = wallclock.Clock(None, store.get("timezone"))
                 R["fusion"] = fusion_summary(freps)
                 lines_all = P["lines"]
@@ -438,6 +479,11 @@ def create_app(repo=None, brief_service=None):
                 R["clock"] = wallclock.Clock.for_recording(ds, store)
                 R["recording"] = ds["label"]
                 lines_all = None
+            try:                                  # zone flow is a side view: a failure here must not break the other pages
+                R["flow"] = zoneflow.analyse_flow(R)
+            except Exception:
+                log.exception("Zone flow could not be worked out for layout %s", layout["key"])
+                R["flow"] = None
             R["pos"], R["pos_error"] = None, False
             try:                                  # sales are optional: a failure here must not break the other pages
                 R["pos"] = sales.analyse_pos(R, lines_all if pooled_ds else repo.load_pos(ds, store))
@@ -802,7 +848,8 @@ def create_app(repo=None, brief_service=None):
         layout = pick_layout(store, layouts, request.args.get("layout"))
         if not layout or not layout["ready"]:
             return page("empty.html", store, layouts, layout, title="Journeys", active="journeys")
-        return page("journeys.html", store, layouts, layout, title="Journeys", active="journeys", segments=SEGMENTS)
+        return page("journeys.html", store, layouts, layout, title="Journeys", active="journeys", segments=SEGMENTS,
+                    flow_min_edge=FLOW_MIN_EDGE, flow_min_n=FLOW_MIN_N)
 
     @app.get("/app/s/<ref>/plan")
     @login_required
@@ -881,6 +928,13 @@ def create_app(repo=None, brief_service=None):
             if seg not in SEGMENTS:
                 abort(400)
             lab = lab[lab.mission == seg]
+        try:
+            only = journey_ids(R, request.args.get("visited") or None, request.args.get("w", type=int), request.args.get("party") or None)
+        except ValueError:
+            abort(400)
+        total = int(len(lab))
+        if only is not None:
+            lab = lab[lab.track_id.isin(only)]
         pick = lab.sample(min(n, len(lab)), random_state=seed) if len(lab) else lab
         groups = dict(tuple(R["df"][R["df"].track_id.isin(pick.track_id)].groupby("track_id")))
         out = []
@@ -889,8 +943,72 @@ def create_app(repo=None, brief_service=None):
             out.append(dict(id=int(row.track_id), mission=row.mission, confidence=float(row.confidence),
                             x=gr.x.rolling(5, min_periods=1, center=True).mean().round(2).tolist(),
                             y=gr.y.rolling(5, min_periods=1, center=True).mean().round(2).tolist()))
-        return jsonify(clean_json(dict(paths=out, available=int(len(lab)), zones=zone_geo(layout["zones"]),
+        return jsonify(clean_json(dict(paths=out, available=int(len(lab)), of_segment=total, filters=journey_filters(R), zones=zone_geo(layout["zones"]),
                                        store=dict(w=float(store["width_m"]), h=float(store["height_m"])))))
+
+    @app.get("/app/s/<ref>/whatif")
+    @login_required
+    def whatif(ref):
+        store, layouts = load_ctx(ref)
+        layout = pick_layout(store, layouts, request.args.get("layout"))
+        if not layout or not layout["ready"]:
+            return page("empty.html", store, layouts, layout, title="What-if", active="whatif")
+        merch = [n for n, z in layout["zones"].items() if z[4] == "merchandise"]
+        return page("whatif.html", store, layouts, layout, title="What-if", active="whatif", merch=merch,
+                    presence_s=int(MIN_PRESENCE_S), catch_m=WHATIF_CATCH_M,
+                    err_median=WHATIF_ERR_MEDIAN_PTS, err_80=WHATIF_ERR_80_PTS,
+                    swap_err_median=WHATIF_SWAP_ERR_MEDIAN_PTS, swap_err_80=WHATIF_SWAP_ERR_80_PTS)
+
+    @app.get("/api/s/<ref>/whatif/<key>/scan")
+    @login_required
+    def api_whatif_scan(ref, key):
+        store, layout, R = api_layout(ref, key)
+        try:
+            out = whatif_model.scan(R, request.args.get("zone", ""))
+        except whatif_model.WhatIfError as e:
+            return jsonify(error=str(e)), 422
+        out["zones"] = zone_geo(layout["zones"])
+        out["store"] = dict(w=float(store["width_m"]), h=float(store["height_m"]))
+        return jsonify(clean_json(out))
+
+    @app.get("/api/s/<ref>/whatif/<key>/swap")
+    @login_required
+    def api_whatif_swap(ref, key):
+        store, layout, R = api_layout(ref, key)
+        try:
+            out = whatif_model.swap(R, request.args.get("a", ""), request.args.get("b", ""))
+        except whatif_model.WhatIfError as e:
+            return jsonify(error=str(e)), 422
+        return jsonify(clean_json(out))
+
+    @app.get("/api/s/<ref>/whatif/<key>")
+    @login_required
+    def api_whatif(ref, key):
+        store, layout, R = api_layout(ref, key)
+        try:
+            cx, cy = request.args.get("cx", type=float), request.args.get("cy", type=float)
+            if cx is None or cy is None:
+                abort(400)
+            out = whatif_model.what_if(R, request.args.get("zone", ""), cx=cx, cy=cy)
+        except whatif_model.WhatIfError as e:
+            return jsonify(error=str(e)), 422
+        return jsonify(clean_json(out))
+
+    @app.get("/api/s/<ref>/flow/<key>")
+    @login_required
+    def api_flow(ref, key):
+        store, layout, R = api_layout(ref, key)
+        seg = request.args.get("segment", "shoppers")
+        if seg not in zoneflow.SEGMENTS:
+            abort(400)
+        try:
+            only = journey_ids(R, request.args.get("visited") or None, request.args.get("w", type=int), request.args.get("party") or None)
+        except ValueError:
+            abort(400)
+        F = R.get("flow") if (seg == "shoppers" and only is None) else None
+        if F is None:
+            F = zoneflow.analyse_flow(R, seg, only)
+        return jsonify(clean_json(F))
 
     # ------------------------------------------------------------------ settings
     @app.get("/app/s/<ref>/settings")

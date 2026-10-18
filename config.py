@@ -52,3 +52,23 @@ POS_MIN_Z = 3.0           # ...and its buy rate must be this many standard error
 POS_MAP_MIN_SHOPPERS = 8  # a map cell needs this many shoppers before its average spend is shown
 POS_MAX_TXNS = 5000       # sales per recording (matching builds a sales x register-visits table)
 POS_MAX_LINES = 50000     # rows per upload
+
+# ---- zone flow (where shoppers go next, turn-backs)
+FLOW_MIN_EDGE = 5         # a route needs this many shoppers before it is drawn or named (no one-off paths)
+FLOW_MIN_N = 20           # a zone needs this many arrivals before its turn-back share is judged
+FLOW_MIN_ZONES = 3        # ...and at least this many zones must be judgeable, so the store median means something
+FLOW_MAX_STEPS = 4        # the flow diagram follows a shopper through this many zones
+FLOW_TOP_ZONES = 8        # zones beyond the busiest few are grouped as "Other zones" in the diagram
+FLOW_TURN_MIN_SHARE = 0.30  # a turn-back flag needs at least this share going straight back...
+FLOW_TURN_MIN_RATIO = 1.5   # ...and this many times the store median
+FLOW_MIN_Z = 3.0            # ...and this many standard errors above the median (same bar as the other flags)
+
+# ---- what-if: move one zone (passers-by x capture rate)
+WHATIF_CATCH_M = 1.0       # "passing" a zone means spending MIN_PRESENCE_S within this many metres of its edge
+WHATIF_MIN_EXPOSED = 20    # fewer passers than this and the zone's capture rate is not estimated
+WHATIF_BOOT = 300          # resamples of the visits for the interval
+WHATIF_STEP_M = 1.0        # spacing of candidate positions when scanning the floor
+WHATIF_ERR_MEDIAN_PTS = 9    # measured on simulated shops (tests/validate_whatif.py): half of estimates were within this many points
+WHATIF_ERR_80_PTS = 19       # ...and four in five were within this many. Real shops will be less predictable.
+WHATIF_SWAP_ERR_MEDIAN_PTS = 10   # swaps, 50 zone estimates over two independent scorecard runs: half within this many points,
+WHATIF_SWAP_ERR_80_PTS = 19       # four in five within this many (worst 35), and the direction of a clear change right 32 times in 40
